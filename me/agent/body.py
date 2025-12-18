@@ -135,10 +135,60 @@ class AgentIdentity(BaseModel):
     generation: int = 0
 
 
+class ModelProvider(str, Enum):
+    """Supported model providers."""
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    OLLAMA = "ollama"
+    BEDROCK = "bedrock"
+    LITELLM = "litellm"
+
+
+class ModelConfig(BaseModel):
+    """
+    Model configuration - declarative, file-based.
+
+    Edit ~/.me/agents/<id>/model.json to change models:
+
+    ```json
+    {
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-4-20250514",
+      "temperature": 0.7,
+      "max_tokens": 4096
+    }
+    ```
+
+    Or for local Ollama:
+    ```json
+    {
+      "provider": "ollama",
+      "model_id": "llama3",
+      "host": "http://localhost:11434"
+    }
+    ```
+    """
+    provider: ModelProvider = ModelProvider.ANTHROPIC
+    model_id: str = "claude-sonnet-4-20250514"
+
+    # Common parameters
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    top_p: float | None = None
+
+    # Provider-specific
+    api_key: str | None = None  # Falls back to env vars
+    host: str | None = None  # For Ollama
+    base_url: str | None = None  # For OpenAI-compatible endpoints
+
+    # Advanced
+    stop_sequences: list[str] = Field(default_factory=list)
+    extra_params: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentConfig(BaseModel):
     """Mutable configuration."""
     refresh_rate_ms: int = 100
-    model: str | None = None
     permission_mode: str = "acceptEdits"
     max_turns: int | None = None
 
@@ -552,6 +602,31 @@ class BodyDirectory:
         if fm:
             fm.model = value
 
+    @property
+    def model_config(self) -> ModelConfig:
+        """
+        Get model configuration.
+
+        The agent reads model settings from model.json, allowing you to
+        change models by editing the file:
+
+        ```json
+        {
+          "provider": "ollama",
+          "model_id": "llama3",
+          "host": "http://localhost:11434"
+        }
+        ```
+        """
+        fm = self._files.get("model")
+        return fm.model if fm else ModelConfig()
+
+    @model_config.setter
+    def model_config(self, value: ModelConfig):
+        fm = self._files.get("model")
+        if fm:
+            fm.model = value
+
     # =========================================================================
     # Step-based State Files (mutable, versioned per step)
     # =========================================================================
@@ -679,6 +754,9 @@ class BodyDirectory:
 
         # Register config at top level
         self._files.register("config", AgentConfig, default=AgentConfig())
+
+        # Register model config at top level (declarative model configuration)
+        self._files.register("model", ModelConfig, default=ModelConfig())
 
         # Create step 0000 with initial state
         step_dir = self.root / "steps" / "0000"

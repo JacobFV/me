@@ -788,8 +788,6 @@ class AgentTUI(App):
 
     async def _run_agent(self, prompt: str):
         """Run the agent asynchronously with streaming output."""
-        from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock, ResultMessage
-
         chat = self.query_one("#chat-history", ChatHistory)
         status = self.query_one("#status-indicator", StatusIndicator)
         stats = self.query_one("#stats-panel", StatsPanel)
@@ -801,26 +799,33 @@ class AgentTUI(App):
             logger.info(f"Starting agent.run with prompt: {prompt[:50]}")
             async for message in self.agent.run(prompt):
                 message_count += 1
-                logger.debug(f"Received message {message_count}: {type(message).__name__}")
-                if isinstance(message, AssistantMessage):
-                    status.status = "running"
-                    logger.debug(f"AssistantMessage has {len(message.content)} content blocks")
-                    for block in message.content:
-                        logger.debug(f"  Block type: {type(block).__name__}")
-                        if isinstance(block, TextBlock):
-                            logger.debug(f"  TextBlock: {block.text[:100] if block.text else '(empty)'}")
-                            # Start streaming message on first text
-                            if streaming_msg is None:
-                                streaming_msg = chat.start_streaming_message()
-                            streaming_msg.append_text(block.text)
-                            self._current_response.append(block.text)
-                        elif isinstance(block, ToolUseBlock):
-                            logger.debug(f"  ToolUseBlock: {block.name}")
-                            chat.add_tool_call(block.name, block.input)
-                            stats.increment_tool_calls()
+                role = message.get("role", "unknown")
+                content = message.get("content", "")
+                logger.debug(f"Received message {message_count}: role={role}")
 
-                elif isinstance(message, ResultMessage):
-                    logger.debug("ResultMessage received")
+                if role == "assistant":
+                    status.status = "running"
+                    logger.debug(f"Assistant content: {content[:100] if content else '(empty)'}")
+                    # Start streaming message on first text
+                    if streaming_msg is None:
+                        streaming_msg = chat.start_streaming_message()
+                    streaming_msg.append_text(content)
+                    self._current_response.append(content)
+
+                elif role == "tool":
+                    # Tool call info
+                    tool_name = message.get("name", "unknown")
+                    tool_input = message.get("input", {})
+                    logger.debug(f"Tool call: {tool_name}")
+                    chat.add_tool_call(tool_name, tool_input)
+                    stats.increment_tool_calls()
+
+                elif role == "result":
+                    logger.debug("Result message received")
+
+                elif role == "error":
+                    logger.error(f"Error from agent: {content}")
+                    chat.add_agent_message(f"**Error:** {content}")
 
             logger.info(f"agent.run completed. Total messages: {message_count}")
 
