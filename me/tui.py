@@ -54,6 +54,7 @@ SLASH_COMMANDS = {
     "/body": "Show agent body state",
     "/memory": "Show memory stats",
     "/goals": "Show current goals",
+    "/queue": "Focus message queue",
     "/clear": "Clear chat history",
     "/exit": "Exit the TUI",
 }
@@ -253,6 +254,73 @@ class StatusIndicator(Static):
         self.update(icons.get(status, "[#484f58]○[/]"))
 
 
+class QueuePanel(Static):
+    """Panel showing queued messages."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._queue: list[str] = []
+        self._selected_index: int = -1
+        self._focused = False
+
+    def add_message(self, text: str) -> int:
+        """Add a message to the queue. Returns queue position."""
+        self._queue.append(text)
+        self._refresh_display()
+        return len(self._queue)
+
+    def pop_message(self) -> str | None:
+        """Remove and return the first message from queue."""
+        if self._queue:
+            msg = self._queue.pop(0)
+            if self._selected_index >= len(self._queue):
+                self._selected_index = len(self._queue) - 1
+            self._refresh_display()
+            return msg
+        return None
+
+    def remove_selected(self) -> str | None:
+        """Remove the selected message from queue."""
+        if self._queue and 0 <= self._selected_index < len(self._queue):
+            msg = self._queue.pop(self._selected_index)
+            if self._selected_index >= len(self._queue):
+                self._selected_index = max(0, len(self._queue) - 1)
+            self._refresh_display()
+            return msg
+        return None
+
+    def is_empty(self) -> bool:
+        return len(self._queue) == 0
+
+    def count(self) -> int:
+        return len(self._queue)
+
+    def set_focused(self, focused: bool):
+        self._focused = focused
+        if focused and self._queue and self._selected_index < 0:
+            self._selected_index = 0
+        self._refresh_display()
+
+    def move_selection(self, delta: int):
+        if self._queue:
+            self._selected_index = max(0, min(len(self._queue) - 1, self._selected_index + delta))
+            self._refresh_display()
+
+    def _refresh_display(self):
+        if not self._queue:
+            self.update("[#484f58]Queue empty[/]")
+            return
+
+        lines = [f"[#8b949e bold]Queue[/] [#484f58]({len(self._queue)})[/]"]
+        for i, msg in enumerate(self._queue):
+            truncated = msg[:18] + "…" if len(msg) > 18 else msg
+            if self._focused and i == self._selected_index:
+                lines.append(f"[#58a6ff]› {truncated}[/]")
+            else:
+                lines.append(f"[#484f58]  {truncated}[/]")
+        self.update("\n".join(lines))
+
+
 class AgentTUI(App):
     """Textual TUI for agent interactive sessions."""
 
@@ -282,12 +350,25 @@ class AgentTUI(App):
         scrollbar-color: #30363d;
     }
 
-    /* Stats Panel */
-    #stats-panel {
+    /* Right Sidebar */
+    #right-sidebar {
         height: 100%;
-        padding: 1 2;
         background: #161b22;
         border-left: solid #30363d;
+        layout: grid;
+        grid-size: 1;
+        grid-rows: 1fr auto;
+    }
+
+    #stats-panel {
+        padding: 1 2;
+    }
+
+    #queue-panel {
+        padding: 1 2;
+        border-top: solid #30363d;
+        min-height: 5;
+        max-height: 12;
     }
 
     /* Bottom Bar */
@@ -393,18 +474,21 @@ class AgentTUI(App):
         self.initial_prompt = initial_prompt
         self._current_response: list[str] = []
         self._processing = False
+        self._queue_focused = False
 
     def compose(self) -> ComposeResult:
         with Container(id="main-container"):
             with Vertical(id="chat-panel"):
                 yield ChatHistory(id="chat-history")
-            yield StatsPanel(self.agent, id="stats-panel")
+            with Vertical(id="right-sidebar"):
+                yield StatsPanel(self.agent, id="stats-panel")
+                yield QueuePanel(id="queue-panel")
         with Vertical(id="bottom-bar"):
             yield SlashCommandList(id="slash-commands")
             with Horizontal(id="input-row"):
                 yield StatusIndicator(id="status-indicator")
                 yield Input(placeholder="Message… (/ for commands)", id="prompt-input")
-            yield Static("[dim]enter[/] send  [dim]ctrl+c[/] quit  [dim]/[/] commands", id="help-bar")
+            yield Static("[dim]enter[/] send/queue  [dim]ctrl+s[/] priority  [dim]/[/] commands", id="help-bar")
 
     def on_mount(self):
         """Initialize on mount."""
@@ -413,6 +497,72 @@ class AgentTUI(App):
 
         if self.initial_prompt:
             self.call_later(self._send_initial_prompt)
+
+    async def on_key(self, event) -> None:
+        """Handle special key combinations."""
+        logger.debug(f"on_key: {event.key!r}")
+
+        # Cmd+Enter or Ctrl+Enter to interrupt and send immediately
+        # On Mac terminals, this often comes through as escape sequences
+        # We'll use Ctrl+S as a reliable alternative (common "send" shortcut)
+        if event.key in ("ctrl+s",):
+            logger.info("Interrupt send triggered")
+            event.prevent_default()
+            event.stop()
+            await self._interrupt_and_send()
+            return
+
+        # Queue focus mode key handling
+        if self._queue_focused:
+            queue = self.query_one("#queue-panel", QueuePanel)
+
+            if event.key == "up":
+                queue.move_selection(-1)
+                event.prevent_default()
+                event.stop()
+            elif event.key == "down":
+                queue.move_selection(1)
+                event.prevent_default()
+                event.stop()
+            elif event.key in ("delete", "backspace"):
+                removed = queue.remove_selected()
+                if removed:
+                    self.notify(f"Removed: {removed[:20]}…" if len(removed) > 20 else f"Removed: {removed}", timeout=1)
+                if queue.is_empty():
+                    self._exit_queue_focus()
+                event.prevent_default()
+                event.stop()
+            elif event.key == "escape":
+                self._exit_queue_focus()
+                event.prevent_default()
+                event.stop()
+
+    async def _interrupt_and_send(self):
+        """Interrupt current processing and send input immediately."""
+        input_field = self.query_one("#prompt-input", Input)
+        text = input_field.value.strip()
+
+        if not text:
+            self.notify("Nothing to send", timeout=1)
+            return
+
+        input_field.clear()
+
+        # If processing, this will queue but we'll show it's prioritized
+        if self._processing:
+            queue = self.query_one("#queue-panel", QueuePanel)
+            # Insert at front of queue (priority)
+            queue._queue.insert(0, text)
+            queue._refresh_display()
+            self.notify("Priority queued (will send next)", timeout=1.5)
+            logger.info(f"Priority queued: {text[:50]}")
+        else:
+            # Send immediately
+            logger.info(f"Interrupt sending: {text[:50]}")
+            if text.startswith("/"):
+                await self._handle_command(text)
+            else:
+                await self._process_input(text)
 
     async def _send_initial_prompt(self):
         """Send the initial prompt after mount."""
@@ -439,10 +589,14 @@ class AgentTUI(App):
             input_field.focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle Enter key - send message immediately."""
+        """Handle Enter key - send immediately or queue if agent is running."""
         logger.info("on_input_submitted called")
         slash_list = self.query_one("#slash-commands", SlashCommandList)
         slash_list.display = False
+
+        # Exit queue focus mode when submitting
+        if self._queue_focused:
+            self._exit_queue_focus()
 
         text = event.value.strip()
         if not text:
@@ -450,6 +604,15 @@ class AgentTUI(App):
             return
 
         event.input.clear()
+
+        # If agent is running, queue the message
+        if self._processing:
+            queue = self.query_one("#queue-panel", QueuePanel)
+            pos = queue.add_message(text)
+            logger.info(f"Queued message at position {pos}: {text[:50]}")
+            self.notify(f"Queued #{pos}", timeout=1)
+            return
+
         logger.info(f"Sending message: {text[:50]}")
 
         # Process immediately
@@ -495,6 +658,36 @@ class AgentTUI(App):
         status.status = "ready"
         self._processing = False
 
+        # Process next queued message if any
+        await self._process_queue()
+
+    async def _process_queue(self):
+        """Process queued messages one by one."""
+        queue = self.query_one("#queue-panel", QueuePanel)
+        if not queue.is_empty() and not self._processing:
+            next_msg = queue.pop_message()
+            if next_msg:
+                logger.info(f"Processing queued message: {next_msg[:50]}")
+                if next_msg.startswith("/"):
+                    await self._handle_command(next_msg)
+                else:
+                    await self._process_input(next_msg)
+
+    def _enter_queue_focus(self):
+        """Enter queue focus mode."""
+        self._queue_focused = True
+        queue = self.query_one("#queue-panel", QueuePanel)
+        queue.set_focused(True)
+        self.query_one("#prompt-input", Input).placeholder = "↑↓ navigate, del remove, esc exit"
+
+    def _exit_queue_focus(self):
+        """Exit queue focus mode."""
+        self._queue_focused = False
+        queue = self.query_one("#queue-panel", QueuePanel)
+        queue.set_focused(False)
+        self.query_one("#prompt-input", Input).placeholder = "Message… (/ for commands)"
+        self.query_one("#prompt-input", Input).focus()
+
     async def _handle_command(self, command: str):
         """Handle slash commands."""
         chat = self.query_one("#chat-history", ChatHistory)
@@ -532,6 +725,14 @@ class AgentTUI(App):
             else:
                 goals_text = "No active goals."
             chat.add_agent_message(goals_text)
+        elif cmd == "/queue":
+            queue = self.query_one("#queue-panel", QueuePanel)
+            if queue.is_empty():
+                chat.add_agent_message("Queue is empty.")
+            else:
+                self._enter_queue_focus()
+                chat.add_agent_message(f"Focused on queue ({queue.count()} messages). Use ↑↓ to navigate, Delete to remove, Esc to exit.")
+            return  # Don't add separator, user is in queue mode
         elif cmd == "/clear":
             chat.remove_children()
             chat.add_agent_message("Chat cleared.")
