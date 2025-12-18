@@ -735,12 +735,27 @@ class BodyDirectory:
         # Check if already initialized
         identity_path = self.root / "identity.json"
         if identity_path.exists():
-            fm = FileModel(identity_path, AgentIdentity, frozen=True)
+            # Load existing identity
+            self._files.register("identity", AgentIdentity, frozen=True)
+
+            # Load existing config files
+            config_path = self.root / "config.json"
+            if config_path.exists():
+                self._files.register("config", AgentConfig)
+
+            # Load existing model config
+            model_path = self.root / "model.json"
+            if model_path.exists():
+                self._files.register("model", ModelConfig)
+            else:
+                # Create default model config for older agents
+                self._files.register("model", ModelConfig, default=ModelConfig())
+
             # Ensure step files are set up
             if not self._step_files and self._current_dir.exists():
                 self._step_files = FileDirectory(self._current_dir, create=False)
                 self._register_step_files()
-            return fm.model
+            return self._files.get("identity").model
 
         # Create identity (frozen - cannot change after creation)
         identity = AgentIdentity(
