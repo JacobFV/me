@@ -29,7 +29,6 @@ from textual.widgets import (
     Rule,
 )
 from textual.message import Message
-from textual import work
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -387,7 +386,6 @@ class AgentTUI(App):
 
         chat.add_separator()
 
-    @work(exclusive=True)
     async def _run_agent(self, prompt: str):
         """Run the agent asynchronously."""
         from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock, ResultMessage
