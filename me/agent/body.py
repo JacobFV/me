@@ -13,12 +13,8 @@ This module defines:
 Structure:
     ~/.me/agents/<id>/
     ├── identity.json           # IMMUTABLE - who this agent is
-    ├── config.json             # Settings (refresh rate, model, etc.)
-    ├── character.json          # Values, tendencies, revealed preferences
-    ├── embodiment.json         # Location, capabilities, mood
-    ├── sensors.json            # Sensor definitions
-    ├── mouth.json              # Where speech goes
-    ├── working_set.json        # Goals, open loops, decisions
+    ├── config.json             # Session settings (refresh rate, model, etc.)
+    ├── current -> steps/0005   # Symlink to current step
     ├── memory/
     │   ├── episodes/           # Episode markdown files
     │   ├── procedures/         # Procedure markdown files
@@ -29,19 +25,24 @@ Structure:
     │   ├── pipelines/          # Pipeline definitions (.json)
     │   ├── streams/            # Pipeline outputs (pre-conscious)
     │   └── status.json         # Runner state
-    ├── perception/
-    │   └── focus.json          # Current attention focus
     └── steps/
-        └── NNNN/               # Step history
-            ├── state.json
-            ├── input.txt
-            └── output.txt
+        └── NNNN/               # Step snapshots (each is complete state)
+            ├── embodiment.json # Location, capabilities, mood
+            ├── character.json  # Values, tendencies, revealed preferences
+            ├── working_set.json# Goals, open loops, decisions
+            ├── mouth.json      # Where speech goes
+            ├── sensors.json    # Sensor definitions
+            ├── focus.json      # Current attention focus
+            ├── input.txt       # User input for this step
+            └── output.txt      # Agent output for this step
 
 Philosophy:
 - The filesystem IS the agent's body
 - Read/Write/Edit are the only tools needed
 - Memory is markdown (human-readable, grep-able)
 - State is JSON (machine-parseable, editable)
+- Each step is a complete snapshot - enables replay and debugging
+- current/ symlink gives access to latest state
 - Unconscious pipelines run in background, outputs available in streams/
 - Conscious attention is choosing which files to read
 """
@@ -252,6 +253,24 @@ class Character(BaseModel):
     total_decisions: int = 0
 
 
+class Focus(BaseModel):
+    """
+    What the agent is currently attending to.
+
+    Core focus fields are defined here. The unconscious module extends this
+    with semantic routing fields (embedding, etc.) for daemon energy allocation.
+    """
+    streams: list[str] = Field(default_factory=list)
+    raw: list[str] = Field(default_factory=list)
+    description: str = ""
+    changed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    budget: float = 1.0
+    auto_include: list[str] = Field(default_factory=lambda: ["danger-assessment.md", "situation.md"])
+    # Semantic fields (optional, populated by unconscious system)
+    embedding: list[float] = Field(default_factory=list)
+    embedding_updated: datetime | None = None
+
+
 # =============================================================================
 # Memory Models (Markdown with JSON frontmatter)
 # =============================================================================
@@ -417,7 +436,21 @@ class BodyDirectory:
 
     The filesystem IS the agent. Read/Write/Edit are all you need.
     Uses filepydantic for reactive JSON file management.
+
+    State files (embodiment, character, working_set, etc.) live in step
+    directories. The `current` symlink points to the active step, so
+    `current/embodiment.json` is always the current state.
     """
+
+    # Mutable state files that live in each step directory
+    STEP_STATE_FILES = [
+        ("embodiment", Embodiment),
+        ("character", Character),
+        ("working_set", WorkingSet),
+        ("mouth", MouthConfig),
+        ("sensors", SensorsConfig),
+        ("focus", Focus),
+    ]
 
     def __init__(self, base_dir: Path, agent_id: str):
         self.base_dir = base_dir
@@ -429,8 +462,15 @@ class BodyDirectory:
         # Create directory structure
         self._ensure_structure()
 
-        # FileDirectory for JSON state files
+        # FileDirectory for top-level immutable files (identity, config)
         self._files = FileDirectory(self.root, create=True)
+
+        # FileDirectory for step-based mutable state (via current symlink)
+        self._current_dir = self.root / "current"
+        self._step_files: FileDirectory | None = None
+        if self._current_dir.exists():
+            self._step_files = FileDirectory(self._current_dir, create=False)
+            self._register_step_files()
 
     def _ensure_structure(self):
         """Create the directory structure."""
@@ -445,10 +485,37 @@ class BodyDirectory:
             "unconscious",
             "unconscious/pipelines",
             "unconscious/streams",
-            "perception",
             "steps",
         ]:
             (self.root / subdir).mkdir(parents=True, exist_ok=True)
+
+    def _register_step_files(self):
+        """Register state file models with the step FileDirectory."""
+        if not self._step_files:
+            return
+        for name, model_class in self.STEP_STATE_FILES:
+            if not self._step_files.get(name):
+                self._step_files.register(name, model_class, default=model_class())
+
+    def _write_step_state(self, step_dir: Path, defaults: dict[str, BaseModel] | None = None):
+        """Write all state files to a step directory."""
+        defaults = defaults or {}
+        for name, model_class in self.STEP_STATE_FILES:
+            model = defaults.get(name, model_class())
+            path = step_dir / f"{name}.json"
+            path.write_text(model.model_dump_json(indent=2))
+
+    def _copy_step_state(self, from_step: Path, to_step: Path):
+        """Copy state files from one step to another."""
+        for name, _ in self.STEP_STATE_FILES:
+            src = from_step / f"{name}.json"
+            dst = to_step / f"{name}.json"
+            if src.exists():
+                dst.write_text(src.read_text())
+            else:
+                # Write default if source doesn't exist
+                model_class = dict(self.STEP_STATE_FILES)[name]
+                dst.write_text(model_class().model_dump_json(indent=2))
 
     # =========================================================================
     # System/Runtime Info
@@ -466,7 +533,7 @@ class BodyDirectory:
         self._start_time = time
 
     # =========================================================================
-    # JSON State Files (using filepydantic)
+    # Top-level Files (immutable or session-scoped)
     # =========================================================================
 
     @property
@@ -485,60 +552,103 @@ class BodyDirectory:
         if fm:
             fm.model = value
 
+    # =========================================================================
+    # Step-based State Files (mutable, versioned per step)
+    # =========================================================================
+
     @property
     def embodiment(self) -> Embodiment:
-        fm = self._files.get("embodiment")
-        return fm.model if fm else Embodiment()
+        if self._step_files:
+            fm = self._step_files.get("embodiment")
+            if fm:
+                return fm.model
+        return Embodiment()
 
     @embodiment.setter
     def embodiment(self, value: Embodiment):
-        fm = self._files.get("embodiment")
-        if fm:
-            fm.model = value
+        if self._step_files:
+            fm = self._step_files.get("embodiment")
+            if fm:
+                fm.model = value
 
     @property
     def character(self) -> Character:
-        fm = self._files.get("character")
-        return fm.model if fm else Character()
+        if self._step_files:
+            fm = self._step_files.get("character")
+            if fm:
+                return fm.model
+        return Character()
 
     @character.setter
     def character(self, value: Character):
-        fm = self._files.get("character")
-        if fm:
-            fm.model = value
+        if self._step_files:
+            fm = self._step_files.get("character")
+            if fm:
+                fm.model = value
 
     @property
     def sensors(self) -> SensorsConfig:
-        fm = self._files.get("sensors")
-        return fm.model if fm else SensorsConfig()
+        if self._step_files:
+            fm = self._step_files.get("sensors")
+            if fm:
+                return fm.model
+        return SensorsConfig()
 
     @sensors.setter
     def sensors(self, value: SensorsConfig):
-        fm = self._files.get("sensors")
-        if fm:
-            fm.model = value
+        if self._step_files:
+            fm = self._step_files.get("sensors")
+            if fm:
+                fm.model = value
 
     @property
     def mouth(self) -> MouthConfig:
-        fm = self._files.get("mouth")
-        return fm.model if fm else MouthConfig()
+        if self._step_files:
+            fm = self._step_files.get("mouth")
+            if fm:
+                return fm.model
+        return MouthConfig()
 
     @mouth.setter
     def mouth(self, value: MouthConfig):
-        fm = self._files.get("mouth")
-        if fm:
-            fm.model = value
+        if self._step_files:
+            fm = self._step_files.get("mouth")
+            if fm:
+                fm.model = value
 
     @property
     def working_set(self) -> WorkingSet:
-        fm = self._files.get("working_set")
-        return fm.model if fm else WorkingSet()
+        if self._step_files:
+            fm = self._step_files.get("working_set")
+            if fm:
+                return fm.model
+        return WorkingSet()
 
     @working_set.setter
     def working_set(self, value: WorkingSet):
-        fm = self._files.get("working_set")
-        if fm:
-            fm.model = value
+        if self._step_files:
+            fm = self._step_files.get("working_set")
+            if fm:
+                fm.model = value
+
+    @property
+    def focus(self) -> Focus:
+        if self._step_files:
+            fm = self._step_files.get("focus")
+            if fm:
+                return fm.model
+        return Focus()
+
+    @focus.setter
+    def focus(self, value: Focus):
+        if self._step_files:
+            fm = self._step_files.get("focus")
+            if fm:
+                fm.model = value
+
+    # =========================================================================
+    # Initialization
+    # =========================================================================
 
     def initialize(
         self,
@@ -546,11 +656,15 @@ class BodyDirectory:
         parent_id: str | None = None,
         generation: int = 0,
     ) -> AgentIdentity:
-        """Initialize a new agent."""
+        """Initialize a new agent with step 0000."""
         # Check if already initialized
         identity_path = self.root / "identity.json"
         if identity_path.exists():
             fm = FileModel(identity_path, AgentIdentity, frozen=True)
+            # Ensure step files are set up
+            if not self._step_files and self._current_dir.exists():
+                self._step_files = FileDirectory(self._current_dir, create=False)
+                self._register_step_files()
             return fm.model
 
         # Create identity (frozen - cannot change after creation)
@@ -563,13 +677,23 @@ class BodyDirectory:
         )
         self._files.register("identity", AgentIdentity, default=identity, frozen=True)
 
-        # Register other state files with defaults
+        # Register config at top level
         self._files.register("config", AgentConfig, default=AgentConfig())
-        self._files.register("embodiment", Embodiment, default=Embodiment())
-        self._files.register("character", Character, default=Character())
-        self._files.register("sensors", SensorsConfig, default=SensorsConfig())
-        self._files.register("mouth", MouthConfig, default=MouthConfig())
-        self._files.register("working_set", WorkingSet, default=WorkingSet())
+
+        # Create step 0000 with initial state
+        step_dir = self.root / "steps" / "0000"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        self._write_step_state(step_dir)
+
+        # Create current symlink
+        current = self.root / "current"
+        if current.exists() or current.is_symlink():
+            current.unlink()
+        current.symlink_to("steps/0000")
+
+        # Set up step files
+        self._step_files = FileDirectory(self._current_dir, create=False)
+        self._register_step_files()
 
         return identity
 
@@ -642,38 +766,72 @@ class BodyDirectory:
     # =========================================================================
 
     def begin_step(self, step_number: int, input_text: str = "") -> Path:
+        """
+        Begin a new step by creating a step directory with state copied from previous step.
+
+        This creates the step directory, copies all state files from the previous step
+        (or uses defaults if this is the first step), updates the current symlink,
+        and sets up the step FileDirectory for reading/writing state.
+        """
         step_dir = self.root / "steps" / f"{step_number:04d}"
         step_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy state from previous step (if exists) or write defaults
+        prev_step_num = step_number - 1
+        prev_step_dir = self.root / "steps" / f"{prev_step_num:04d}"
+        if prev_step_dir.exists():
+            self._copy_step_state(prev_step_dir, step_dir)
+        else:
+            self._write_step_state(step_dir)
+
+        # Write input
         if input_text:
             (step_dir / "input.txt").write_text(input_text)
+
+        # Update current symlink
         current = self.root / "current"
         if current.exists() or current.is_symlink():
             current.unlink()
         current.symlink_to(f"steps/{step_number:04d}")
+
+        # Set up step files for new step
+        self._step_files = FileDirectory(self._current_dir, create=False)
+        self._register_step_files()
+
         return step_dir
 
     def complete_step(self, output_text: str = ""):
+        """
+        Complete the current step by writing output.
+
+        State files are already in the step directory (written via properties),
+        so this just writes the output text.
+        """
         current = self.root / "current"
         if not current.exists():
             return
         step_dir = current.resolve()
         if output_text:
             (step_dir / "output.txt").write_text(output_text)
-        state = {
-            "config": self.config.model_dump(mode='json'),
-            "embodiment": self.embodiment.model_dump(mode='json'),
-            "character": self.character.model_dump(mode='json'),
-            "working_set": self.working_set.model_dump(mode='json'),
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        with open(step_dir / "state.json", 'w') as f:
-            json.dump(state, f, indent=2, default=str)
 
     def get_step_count(self) -> int:
         steps_dir = self.root / "steps"
         if not steps_dir.exists():
             return 0
         return len([d for d in steps_dir.iterdir() if d.is_dir() and d.name.isdigit()])
+
+    def get_current_step_number(self) -> int:
+        """Get the current step number from the symlink."""
+        current = self.root / "current"
+        if not current.exists() and not current.is_symlink():
+            return 0
+        target = os.readlink(current)
+        # Extract step number from "steps/NNNN"
+        step_name = Path(target).name
+        try:
+            return int(step_name)
+        except ValueError:
+            return 0
 
     # =========================================================================
     # Full State
@@ -688,9 +846,11 @@ class BodyDirectory:
             "sensors": self.sensors.model_dump(mode='json'),
             "mouth": self.mouth.model_dump(mode='json'),
             "working_set": self.working_set.model_dump(mode='json'),
+            "focus": self.focus.model_dump(mode='json'),
             "system": asdict(self.system),
             "runtime": asdict(self.runtime),
             "step_count": self.get_step_count(),
+            "current_step": self.get_current_step_number(),
             "memory": {
                 "episodes": len(self.list_episodes()),
                 "procedures": len(self.list_procedures()),

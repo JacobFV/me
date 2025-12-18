@@ -14,6 +14,7 @@ from me.agent.body import (
     MouthMode,
     SensorsConfig,
     SensorDefinition,
+    Focus,
     Episode,
     Procedure,
     SignificantMoment,
@@ -27,7 +28,6 @@ from me.agent.unconscious import (
     PipelineTrigger,
     PipelineSource,
     TriggerMode,
-    Focus,
     # Daemon system (Agentic OS)
     Daemon,
     DaemonState,

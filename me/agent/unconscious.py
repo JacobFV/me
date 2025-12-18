@@ -61,6 +61,9 @@ from typing import Any, Callable, AsyncIterator
 
 from pydantic import BaseModel, Field
 
+# Import Focus from body to have single source of truth
+from me.agent.body import Focus
+
 # For template variable rendering - lazy import to avoid circular
 _sentence_model = None
 
@@ -617,39 +620,7 @@ class UnconsciousStatus:
 # =============================================================================
 # Focus / Attention
 # =============================================================================
-
-class Focus(BaseModel):
-    """
-    What the agent is currently attending to.
-
-    The agent's conscious perception is defined by what it focuses on.
-    This is a file the agent can edit to change its attention.
-
-    The focus also serves as the central routing signal for the daemon system:
-    daemons semantically close to the focus receive more compute budget.
-    """
-    # Currently attended streams (unconscious outputs)
-    streams: list[str] = Field(default_factory=list)
-
-    # Currently attended raw sources (bypassing unconscious)
-    raw: list[str] = Field(default_factory=list)
-
-    # When focus was last changed
-    changed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-    # Attention budget (0-1, how much cognitive resource here)
-    budget: float = 1.0
-
-    # Auto-focus: streams that should always be included
-    auto_include: list[str] = Field(default_factory=lambda: [
-        "danger-assessment.md",
-        "situation.md",
-    ])
-
-    # Semantic focus - the routing signal for daemon energy allocation
-    description: str = ""  # Natural language description of current focus
-    embedding: list[float] = Field(default_factory=list)  # Computed from description
-    embedding_updated: datetime | None = None
+# Focus model is imported from me.agent.body to have single source of truth
 
 
 # =============================================================================
