@@ -750,7 +750,7 @@ Run ID: `{self._run_id}`
 
         # Create conversation manager for context handling
         conversation_manager = SlidingWindowConversationManager(
-            max_tokens=100000,
+            window_size=40,  # Keep last 40 messages
         )
 
         return StrandsAgent(
