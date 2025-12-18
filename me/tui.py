@@ -71,13 +71,13 @@ class AgentOutput(Static):
     """Widget for displaying agent output."""
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__("", **kwargs)
         self._content_parts: list[str] = []
 
     def add_text(self, text: str):
         """Add text output from the agent."""
         self._content_parts.append(text)
-        self._render()
+        self._update_content()
 
     def add_tool_call(self, tool_name: str, tool_input: dict[str, Any] | None = None):
         """Add a tool call display."""
@@ -93,14 +93,14 @@ class AgentOutput(Static):
             self._content_parts.append(f"\n[dim][Tool: {tool_name}({params})][/dim]\n")
         else:
             self._content_parts.append(f"\n[dim][Tool: {tool_name}][/dim]\n")
-        self._render()
+        self._update_content()
 
     def clear(self):
         """Clear the output."""
         self._content_parts = []
-        self._render()
+        self._update_content()
 
-    def _render(self):
+    def _update_content(self):
         """Render all content."""
         self.update("".join(self._content_parts))
 
@@ -109,21 +109,14 @@ class ChatMessage(Static):
     """A single chat message (user or agent)."""
 
     def __init__(self, role: str, content: str, **kwargs):
-        super().__init__(**kwargs)
+        # Format the message directly
+        if role == "user":
+            text = f"[bold green]you:[/] {content}"
+        else:
+            text = f"[bold blue]agent:[/]\n{content}"
+        super().__init__(text, **kwargs)
         self.role = role
         self.message_content = content
-
-    def compose(self) -> ComposeResult:
-        if self.role == "user":
-            yield Static(
-                f"[bold green]you:[/] {self.message_content}",
-                classes="user-message"
-            )
-        else:
-            yield Static(
-                f"[bold blue]agent:[/]\n{self.message_content}",
-                classes="agent-message"
-            )
 
 
 class ChatHistory(ScrollableContainer):
@@ -168,7 +161,7 @@ class StatusBar(Static):
     """Status bar showing agent state."""
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__("Loading...", **kwargs)
         self.agent_id = ""
         self.step = 0
         self.status = "ready"
@@ -177,9 +170,9 @@ class StatusBar(Static):
         self.agent_id = agent_id or self.agent_id
         self.step = step or self.step
         self.status = status
-        self._render()
+        self._update_content()
 
-    def _render(self):
+    def _update_content(self):
         status_color = {
             "ready": "green",
             "thinking": "yellow",
