@@ -131,6 +131,50 @@ class ChatHistory(ScrollableContainer):
         self.mount(Static("[#21262d]───[/]", classes="separator"))
         self.scroll_end(animate=False)
 
+    def start_streaming_message(self) -> "StreamingMessage":
+        """Start a new streaming agent message."""
+        msg = StreamingMessage()
+        self.mount(msg)
+        self.scroll_end(animate=False)
+        return msg
+
+
+class StreamingMessage(Static):
+    """A streaming agent message that updates as content arrives."""
+
+    def __init__(self, **kwargs):
+        super().__init__("", **kwargs)
+        self._content_parts: list[str] = []
+        self._timestamp = datetime.now().strftime("%H:%M")
+        self.add_class("agent-message")
+
+    def append_text(self, text: str):
+        """Append text to the message and re-render."""
+        self._content_parts.append(text)
+        self._render()
+
+    def _render(self):
+        """Render the current content."""
+        from rich.console import Group
+        content = "".join(self._content_parts)
+        header = Text()
+        header.append(f"{self._timestamp} ", style="#484f58")
+        header.append("◆", style="#a371f7")
+        if content:
+            group = Group(header, Markdown(content))
+        else:
+            # Show typing indicator when no content yet
+            header.append(" …", style="#484f58 italic")
+            group = header
+        self.update(group)
+        # Scroll parent to show new content
+        if self.parent:
+            self.parent.scroll_end(animate=False)
+
+    def get_content(self) -> str:
+        """Get the full content."""
+        return "".join(self._content_parts)
+
 
 class StatsPanel(Static):
     """Right panel showing agent stats and info."""
@@ -646,11 +690,9 @@ class AgentTUI(App):
         await self._run_agent(text)
         logger.info(f"_run_agent completed. Response parts: {len(self._current_response)}")
 
-        # Finalize
+        # Finalize (streaming message already displayed the content)
         if self._current_response:
-            response_text = "".join(self._current_response)
-            logger.info(f"Adding agent message with {len(response_text)} chars")
-            chat.add_agent_message(response_text)
+            logger.info(f"Agent response complete: {len(''.join(self._current_response))} chars")
         else:
             logger.warning("No response content collected!")
 
@@ -745,12 +787,14 @@ class AgentTUI(App):
         chat.add_separator()
 
     async def _run_agent(self, prompt: str):
-        """Run the agent asynchronously."""
+        """Run the agent asynchronously with streaming output."""
         from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock, ResultMessage
 
         chat = self.query_one("#chat-history", ChatHistory)
         status = self.query_one("#status-indicator", StatusIndicator)
         stats = self.query_one("#stats-panel", StatsPanel)
+
+        streaming_msg: StreamingMessage | None = None
 
         try:
             message_count = 0
@@ -765,6 +809,10 @@ class AgentTUI(App):
                         logger.debug(f"  Block type: {type(block).__name__}")
                         if isinstance(block, TextBlock):
                             logger.debug(f"  TextBlock: {block.text[:100] if block.text else '(empty)'}")
+                            # Start streaming message on first text
+                            if streaming_msg is None:
+                                streaming_msg = chat.start_streaming_message()
+                            streaming_msg.append_text(block.text)
                             self._current_response.append(block.text)
                         elif isinstance(block, ToolUseBlock):
                             logger.debug(f"  ToolUseBlock: {block.name}")
@@ -776,11 +824,11 @@ class AgentTUI(App):
 
             logger.info(f"agent.run completed. Total messages: {message_count}")
 
-            # Debug: show if no messages received
+            # Handle cases where no response was shown
             if message_count == 0:
                 logger.warning("No messages received from agent")
                 chat.add_agent_message("*No response from agent*")
-            elif not self._current_response:
+            elif streaming_msg is None:
                 logger.warning(f"Agent sent {message_count} messages but no text content")
                 chat.add_agent_message(f"*Agent sent {message_count} messages but no text content*")
 
