@@ -149,12 +149,12 @@ class StreamingMessage(Static):
         self.add_class("agent-message")
 
     def append_text(self, text: str):
-        """Append text to the message and re-render."""
+        """Append text to the message and refresh display."""
         self._content_parts.append(text)
-        self._render()
+        self._refresh_display()
 
-    def _render(self):
-        """Render the current content."""
+    def _refresh_display(self):
+        """Update the displayed content."""
         from rich.console import Group
         content = "".join(self._content_parts)
         header = Text()
