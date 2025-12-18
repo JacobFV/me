@@ -89,6 +89,166 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 # =============================================================================
+# Daemon Graph Templates (Higher-Order Abstraction)
+# =============================================================================
+
+class DaemonGraphTemplate(BaseModel):
+    """
+    A template for a graph of interconnected daemons.
+
+    This is the meta-level: instead of defining individual daemons,
+    define entire subsystems that can be instantiated together.
+
+    Example: A "world-modeling" template might include:
+        - entity-tracker daemon
+        - relationship-mapper daemon
+        - state-predictor daemon
+        - causal-reasoner daemon
+    All interconnected via depends_on/feeds_into.
+    """
+    name: str
+    description: str = ""
+    version: str = "1.0.0"
+
+    # The daemons in this graph (will be instantiated as Pipelines)
+    daemons: list["Pipeline"] = Field(default_factory=list)
+
+    # Shared state files this subsystem maintains
+    state_files: list[str] = Field(default_factory=list)
+
+    # Process group for all daemons in this graph
+    group: str = "default"
+
+    # Minimum runlevel for the entire subsystem
+    runlevel: "Runlevel" = Field(default="normal")
+
+    # Variables that can be customized when instantiating
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+    # Tags for categorization
+    tags: list[str] = Field(default_factory=list)
+
+    def instantiate(
+        self,
+        prefix: str = "",
+        parameter_overrides: dict[str, Any] | None = None,
+    ) -> list["Pipeline"]:
+        """
+        Instantiate this template into concrete pipelines.
+
+        Args:
+            prefix: Prefix for daemon names (e.g., "world-model-")
+            parameter_overrides: Override default parameters
+
+        Returns:
+            List of Pipeline objects ready to install
+        """
+        params = {**self.parameters, **(parameter_overrides or {})}
+        pipelines = []
+
+        for daemon in self.daemons:
+            # Deep copy and apply prefix
+            data = daemon.model_dump()
+            data["name"] = f"{prefix}{data['name']}" if prefix else data["name"]
+
+            # Prefix dependencies too
+            if prefix:
+                data["depends_on"] = [f"{prefix}{d}" for d in data.get("depends_on", [])]
+                data["feeds_into"] = [f"{prefix}{f}" for f in data.get("feeds_into", [])]
+
+            # Apply group from template if not specified
+            if data.get("group") == "default":
+                data["group"] = self.group
+
+            # Substitute parameters in prompt
+            prompt = data.get("prompt", "")
+            for key, value in params.items():
+                prompt = prompt.replace(f"${{{key}}}", str(value))
+            data["prompt"] = prompt
+
+            pipelines.append(Pipeline.model_validate(data))
+
+        return pipelines
+
+
+class RewardSource(BaseModel):
+    """
+    A source of reward signals for the attribution system.
+
+    This is where rewards COME FROM. The attribution system distributes
+    rewards to daemons, but something needs to generate those rewards.
+
+    Sources:
+        - goal_completion: Goal was achieved
+        - curiosity: Information gain / prediction error
+        - coherence: Consistency with values/character
+        - progress: Movement toward goals
+        - user_feedback: Explicit user signals
+        - environmental: Success/failure of actions
+    """
+    name: str
+    source_type: str  # goal_completion, curiosity, coherence, progress, user_feedback, environmental
+    description: str = ""
+
+    # How to compute the reward (for intrinsic sources)
+    # This can be a daemon name that outputs a reward signal
+    compute_daemon: str | None = None
+
+    # Weight for combining multiple sources
+    weight: float = 1.0
+
+    # Whether this source is currently active
+    enabled: bool = True
+
+    # History of rewards from this source
+    reward_history: list[tuple[datetime, float, str]] = Field(default_factory=list)
+
+
+class MetaDaemonCapability(str, Enum):
+    """What a meta-daemon can do to other daemons."""
+    CREATE = "create"           # Create new daemons
+    MODIFY = "modify"           # Modify existing daemon configs
+    DELETE = "delete"           # Remove daemons
+    START_STOP = "start_stop"   # Control daemon lifecycle
+    REWARD = "reward"           # Emit reward signals
+    FOCUS = "focus"             # Modify focus
+
+
+class MetaDaemon(BaseModel):
+    """
+    A daemon that operates on other daemons.
+
+    Meta-level: Daemons that process data
+    Meta-meta: Daemons that create/modify daemons (this)
+    Meta-meta-meta: Daemons that reason about meta-daemons
+
+    A meta-daemon can:
+        - Create new daemons based on patterns it observes
+        - Modify daemon parameters to improve performance
+        - Spawn entire subsystems from templates
+        - Emit reward signals based on its observations
+    """
+    name: str
+    description: str = ""
+
+    # What this meta-daemon is allowed to do
+    capabilities: list[MetaDaemonCapability] = Field(default_factory=list)
+
+    # The underlying pipeline that powers this meta-daemon
+    pipeline: "Pipeline"
+
+    # Templates this meta-daemon can instantiate
+    available_templates: list[str] = Field(default_factory=list)
+
+    # Constraints on what it can create/modify
+    max_daemons_created: int = 10
+    allowed_groups: list[str] = Field(default_factory=lambda: ["default"])
+
+    # Track what this meta-daemon has created
+    created_daemons: list[str] = Field(default_factory=list)
+
+
+# =============================================================================
 # Pipeline Configuration Models
 # =============================================================================
 
@@ -919,6 +1079,135 @@ class UnconsciousDirectory:
 
         return profile
 
+    # =========================================================================
+    # Daemon Graph Templates (Higher-Order Abstraction)
+    # =========================================================================
+
+    @property
+    def templates_dir(self) -> Path:
+        """Directory for daemon graph templates."""
+        return self.root / "templates"
+
+    def save_template(self, template: "DaemonGraphTemplate") -> Path:
+        """Save a daemon graph template."""
+        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        path = self.templates_dir / f"{template.name}.json"
+        with open(path, 'w') as f:
+            json.dump(template.model_dump(mode='json'), f, indent=2, default=str)
+        return path
+
+    def get_template(self, name: str) -> "DaemonGraphTemplate | None":
+        """Get a template by name."""
+        path = self.templates_dir / f"{name}.json"
+        if path.exists():
+            try:
+                with open(path) as f:
+                    return DaemonGraphTemplate.model_validate(json.load(f))
+            except Exception:
+                pass
+        return None
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        """List all available templates."""
+        if not self.templates_dir.exists():
+            return []
+        result = []
+        for path in self.templates_dir.glob("*.json"):
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                result.append({
+                    "name": data.get("name"),
+                    "description": data.get("description", ""),
+                    "daemon_count": len(data.get("daemons", [])),
+                    "tags": data.get("tags", []),
+                })
+            except Exception:
+                pass
+        return result
+
+    def delete_template(self, name: str) -> bool:
+        """Delete a template."""
+        path = self.templates_dir / f"{name}.json"
+        if path.exists():
+            path.unlink()
+            return True
+        return False
+
+    # =========================================================================
+    # Reward Sources
+    # =========================================================================
+
+    @property
+    def reward_sources_path(self) -> Path:
+        """Path to reward sources configuration."""
+        return self.root / "reward_sources.json"
+
+    def load_reward_sources(self) -> list["RewardSource"]:
+        """Load all reward sources."""
+        if self.reward_sources_path.exists():
+            try:
+                with open(self.reward_sources_path) as f:
+                    data = json.load(f)
+                return [RewardSource.model_validate(s) for s in data]
+            except Exception:
+                pass
+        return []
+
+    def save_reward_sources(self, sources: list["RewardSource"]) -> None:
+        """Save reward sources."""
+        with open(self.reward_sources_path, 'w') as f:
+            json.dump([s.model_dump(mode='json') for s in sources], f, indent=2, default=str)
+
+    def add_reward_source(self, source: "RewardSource") -> None:
+        """Add a reward source."""
+        sources = self.load_reward_sources()
+        # Replace if exists
+        sources = [s for s in sources if s.name != source.name]
+        sources.append(source)
+        self.save_reward_sources(sources)
+
+    def get_reward_source(self, name: str) -> "RewardSource | None":
+        """Get a specific reward source."""
+        for source in self.load_reward_sources():
+            if source.name == name:
+                return source
+        return None
+
+    # =========================================================================
+    # Meta-Daemons
+    # =========================================================================
+
+    @property
+    def meta_daemons_path(self) -> Path:
+        """Path to meta-daemon configurations."""
+        return self.root / "meta_daemons.json"
+
+    def load_meta_daemons(self) -> list["MetaDaemon"]:
+        """Load all meta-daemon configurations."""
+        if self.meta_daemons_path.exists():
+            try:
+                with open(self.meta_daemons_path) as f:
+                    data = json.load(f)
+                return [MetaDaemon.model_validate(m) for m in data]
+            except Exception:
+                pass
+        return []
+
+    def save_meta_daemons(self, meta_daemons: list["MetaDaemon"]) -> None:
+        """Save meta-daemon configurations."""
+        with open(self.meta_daemons_path, 'w') as f:
+            json.dump([m.model_dump(mode='json') for m in meta_daemons], f, indent=2, default=str)
+
+    def add_meta_daemon(self, meta_daemon: "MetaDaemon") -> None:
+        """Add a meta-daemon."""
+        metas = self.load_meta_daemons()
+        metas = [m for m in metas if m.name != meta_daemon.name]
+        metas.append(meta_daemon)
+        self.save_meta_daemons(metas)
+        # Also save the underlying pipeline
+        self.save_pipeline(meta_daemon.pipeline)
+
 
 # =============================================================================
 # Pipeline Runner (Daemon Manager)
@@ -1040,6 +1329,393 @@ class UnconsciousRunner:
     def _log(self, daemon: str, level: LogLevel, message: str, **metadata):
         """Write to journal."""
         self.unconscious.log(daemon, level, message, **metadata)
+
+    # =========================================================================
+    # Daemon Graph Templates (Spawn Subsystems)
+    # =========================================================================
+
+    async def spawn_template(
+        self,
+        template_name: str,
+        prefix: str = "",
+        parameter_overrides: dict[str, Any] | None = None,
+        start_immediately: bool = True,
+    ) -> list[str]:
+        """
+        Spawn all daemons from a template.
+
+        This is the higher-order operation: instead of creating individual daemons,
+        spawn an entire interconnected subsystem at once.
+
+        Args:
+            template_name: Name of the template to instantiate
+            prefix: Prefix for daemon names (e.g., "world-" for "world-entity-tracker")
+            parameter_overrides: Override template parameters
+            start_immediately: Whether to start daemons after creating them
+
+        Returns:
+            List of created daemon names
+        """
+        template = self.unconscious.get_template(template_name)
+        if not template:
+            self._log("system", LogLevel.ERROR, f"Template not found: {template_name}")
+            return []
+
+        # Instantiate the template into pipelines
+        pipelines = template.instantiate(prefix=prefix, parameter_overrides=parameter_overrides)
+        created_names = []
+
+        for pipeline in pipelines:
+            # Save the pipeline
+            self.unconscious.save_pipeline(pipeline)
+            self._pipelines[pipeline.name] = pipeline
+
+            # Create daemon for it
+            daemon = Daemon(name=pipeline.name)
+            self._daemons[pipeline.name] = daemon
+
+            created_names.append(pipeline.name)
+            self._log("system", LogLevel.INFO, f"Created daemon from template: {pipeline.name}")
+
+        # Persist
+        self.unconscious.save_daemons(self._daemons)
+
+        # Start if requested
+        if start_immediately:
+            for name in created_names:
+                await self.start_daemon(name)
+
+        self._log(
+            "system", LogLevel.INFO,
+            f"Spawned template '{template_name}' with {len(created_names)} daemons",
+            template=template_name,
+            daemons=created_names,
+        )
+
+        return created_names
+
+    async def despawn_template(self, template_name: str, prefix: str = "") -> list[str]:
+        """
+        Remove all daemons that were spawned from a template.
+
+        Args:
+            template_name: Name of the template
+            prefix: Prefix used when spawning
+
+        Returns:
+            List of removed daemon names
+        """
+        template = self.unconscious.get_template(template_name)
+        if not template:
+            return []
+
+        removed_names = []
+        for daemon_def in template.daemons:
+            name = f"{prefix}{daemon_def.name}" if prefix else daemon_def.name
+
+            # Stop and remove
+            if name in self._daemons:
+                await self.stop_daemon(name)
+                del self._daemons[name]
+                removed_names.append(name)
+
+            if name in self._pipelines:
+                del self._pipelines[name]
+                self.unconscious.delete_pipeline(name)
+
+        self.unconscious.save_daemons(self._daemons)
+
+        self._log(
+            "system", LogLevel.INFO,
+            f"Despawned template '{template_name}' ({len(removed_names)} daemons)",
+        )
+
+        return removed_names
+
+    def list_spawned_templates(self) -> dict[str, list[str]]:
+        """
+        List which templates have been spawned and their daemons.
+
+        Returns:
+            Dict mapping template names to lists of spawned daemon names
+        """
+        result = {}
+        for template_info in self.unconscious.list_templates():
+            template = self.unconscious.get_template(template_info["name"])
+            if not template:
+                continue
+
+            # Find daemons that match this template
+            spawned = []
+            for daemon_def in template.daemons:
+                # Check for exact match or prefixed match
+                for name in self._daemons:
+                    if name == daemon_def.name or name.endswith(f"-{daemon_def.name}"):
+                        spawned.append(name)
+
+            if spawned:
+                result[template.name] = spawned
+
+        return result
+
+    # =========================================================================
+    # Reward Sources (Connect the Other End)
+    # =========================================================================
+
+    def emit_reward(
+        self,
+        reward: float,
+        task_description: str,
+        source_name: str,
+    ) -> dict[str, float]:
+        """
+        Emit a reward from a source and attribute it to daemons.
+
+        This connects the reward source to the attribution mechanism.
+
+        Args:
+            reward: Scalar reward value (-1 to 1)
+            task_description: What was accomplished/failed
+            source_name: Which reward source is emitting
+
+        Returns:
+            Attribution dict (daemon_name -> weighted_reward)
+        """
+        # Record in source history
+        source = self.unconscious.get_reward_source(source_name)
+        if source:
+            source.reward_history.append((datetime.now(UTC), reward, task_description))
+            # Keep bounded
+            if len(source.reward_history) > 100:
+                source.reward_history = source.reward_history[-100:]
+            self.unconscious.add_reward_source(source)
+
+        # Attribute to daemons
+        return self.attribute_reward(reward, task_description, source_name)
+
+    async def compute_intrinsic_rewards(self) -> dict[str, float]:
+        """
+        Compute and emit rewards from intrinsic motivation sources.
+
+        This runs the intrinsic motivation daemons and interprets their
+        outputs as reward signals.
+
+        Returns:
+            Dict of source_name -> reward_value
+        """
+        rewards = {}
+        sources = self.unconscious.load_reward_sources()
+
+        for source in sources:
+            if not source.enabled or not source.compute_daemon:
+                continue
+
+            # Run the compute daemon if it exists
+            if source.compute_daemon in self._pipelines:
+                try:
+                    run = await self.run_pipeline_now(source.compute_daemon)
+                    if run and run.output_path:
+                        output = self.unconscious.read_stream(run.output_path)
+                        if output:
+                            # Parse reward from output (expect float or "reward: X.XX")
+                            reward = self._parse_reward_output(output)
+                            if reward is not None:
+                                rewards[source.name] = reward * source.weight
+                                self.emit_reward(
+                                    reward * source.weight,
+                                    f"Intrinsic: {source.source_type}",
+                                    source.name,
+                                )
+                except Exception as e:
+                    self._log(
+                        source.compute_daemon, LogLevel.WARN,
+                        f"Failed to compute intrinsic reward: {e}"
+                    )
+
+        return rewards
+
+    def _parse_reward_output(self, output: str) -> float | None:
+        """Parse reward value from daemon output."""
+        import re
+        # Try direct float
+        try:
+            return float(output.strip())
+        except ValueError:
+            pass
+
+        # Try "reward: X.XX" format
+        match = re.search(r'reward[:\s]+(-?[\d.]+)', output.lower())
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                pass
+
+        # Try "score: X.XX" format
+        match = re.search(r'score[:\s]+(-?[\d.]+)', output.lower())
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                pass
+
+        return None
+
+    def register_reward_source(
+        self,
+        name: str,
+        source_type: str,
+        compute_daemon: str | None = None,
+        weight: float = 1.0,
+        description: str = "",
+    ) -> RewardSource:
+        """
+        Register a new reward source.
+
+        Args:
+            name: Unique name for the source
+            source_type: Type (goal_completion, curiosity, coherence, progress, user_feedback, environmental)
+            compute_daemon: Daemon that computes this reward (for intrinsic sources)
+            weight: Weight for combining with other sources
+            description: Human-readable description
+
+        Returns:
+            The created RewardSource
+        """
+        source = RewardSource(
+            name=name,
+            source_type=source_type,
+            compute_daemon=compute_daemon,
+            weight=weight,
+            description=description,
+        )
+        self.unconscious.add_reward_source(source)
+        self._log("system", LogLevel.INFO, f"Registered reward source: {name} ({source_type})")
+        return source
+
+    # =========================================================================
+    # Goal Completion Detection
+    # =========================================================================
+
+    def detect_goal_completion(self, working_set_path: Path | None = None) -> list[dict[str, Any]]:
+        """
+        Detect completed goals and emit rewards.
+
+        Reads the working set, checks for completed goals, and emits
+        positive rewards for each completion.
+
+        Returns:
+            List of completed goals that were rewarded
+        """
+        path = working_set_path or (self.body_root / "working_set.json")
+        if not path.exists():
+            return []
+
+        try:
+            with open(path) as f:
+                working_set = json.load(f)
+        except Exception:
+            return []
+
+        completed = []
+        goals = working_set.get("goals", [])
+
+        for goal in goals:
+            # Check if goal is marked as completed but not yet rewarded
+            if goal.get("outcome") == "completed" and not goal.get("rewarded"):
+                description = goal.get("description", "Unknown goal")
+
+                # Emit positive reward
+                self.emit_reward(
+                    reward=1.0,
+                    task_description=f"Goal completed: {description}",
+                    source_name="goal_completion",
+                )
+
+                # Mark as rewarded
+                goal["rewarded"] = True
+                completed.append(goal)
+
+                self._log(
+                    "system", LogLevel.INFO,
+                    f"Goal completion detected, reward emitted: {description}"
+                )
+
+            elif goal.get("outcome") == "failed" and not goal.get("rewarded"):
+                description = goal.get("description", "Unknown goal")
+
+                # Emit negative reward for failure
+                self.emit_reward(
+                    reward=-0.5,
+                    task_description=f"Goal failed: {description}",
+                    source_name="goal_completion",
+                )
+
+                goal["rewarded"] = True
+                completed.append(goal)
+
+        # Save updated working set if we marked any as rewarded
+        if completed:
+            try:
+                with open(path, 'w') as f:
+                    json.dump(working_set, f, indent=2)
+            except Exception:
+                pass
+
+        return completed
+
+    # =========================================================================
+    # User Feedback Collection
+    # =========================================================================
+
+    def record_user_feedback(
+        self,
+        feedback: str,
+        sentiment: float | None = None,
+        context: str = "",
+    ) -> float:
+        """
+        Record user feedback and emit as reward.
+
+        Args:
+            feedback: The user's feedback text
+            sentiment: Explicit sentiment (-1 to 1) or None to infer
+            context: What the feedback is about
+
+        Returns:
+            The reward value emitted
+        """
+        # If sentiment not provided, try to infer from keywords
+        if sentiment is None:
+            feedback_lower = feedback.lower()
+            if any(w in feedback_lower for w in ["great", "perfect", "excellent", "amazing", "good job", "thank"]):
+                sentiment = 0.8
+            elif any(w in feedback_lower for w in ["bad", "wrong", "terrible", "awful", "hate", "stupid"]):
+                sentiment = -0.8
+            elif any(w in feedback_lower for w in ["ok", "fine", "acceptable"]):
+                sentiment = 0.2
+            else:
+                sentiment = 0.0  # Neutral
+
+        # Emit as reward
+        task_desc = f"User feedback: {feedback[:100]}"
+        if context:
+            task_desc += f" (context: {context})"
+
+        self.emit_reward(
+            reward=sentiment,
+            task_description=task_desc,
+            source_name="user_feedback",
+        )
+
+        self._log(
+            "system", LogLevel.INFO,
+            f"User feedback recorded: sentiment={sentiment:.2f}",
+            feedback=feedback[:200],
+            context=context,
+        )
+
+        return sentiment
 
     # =========================================================================
     # Template Variable Rendering
@@ -2367,3 +3043,556 @@ def install_default_pipelines(unconscious_dir: UnconsciousDirectory):
     existing_groups = unconscious_dir.load_groups()
     if not existing_groups:
         unconscious_dir.save_groups(DEFAULT_GROUPS)
+
+
+# =============================================================================
+# Default Daemon Graph Templates (Higher-Order Subsystems)
+# =============================================================================
+
+DEFAULT_TEMPLATES = [
+    # -------------------------------------------------------------------------
+    # World Model Template - Maintains structured world representation
+    # -------------------------------------------------------------------------
+    DaemonGraphTemplate(
+        name="world-model",
+        description="Maintains a structured representation of the world: entities, relationships, and predictions",
+        version="1.0.0",
+        group="cognition",
+        runlevel=Runlevel.NORMAL,
+        tags=["core", "perception", "world-model"],
+        state_files=["world-model/entities.json", "world-model/relationships.json", "world-model/predictions.json"],
+        parameters={"update_frequency": 5, "max_entities": 100},
+        daemons=[
+            Pipeline(
+                name="entity-tracker",
+                description="Track entities mentioned in the environment",
+                sources=[
+                    PipelineSource(path="{body}/working_set.json"),
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=5),
+                model="haiku",
+                prompt="""Extract and track entities from the current situation.
+
+For each entity, note:
+- Name/identifier
+- Type (person, file, concept, tool, etc.)
+- Current state/status
+- Relevance to current goals
+
+Output as a JSON list of entities. Keep the ${max_entities} most relevant.""",
+                output="world-model/entities.md",
+                priority=2,
+                runlevel=Runlevel.NORMAL,
+                boot_order=25,
+            ),
+            Pipeline(
+                name="relationship-mapper",
+                description="Map relationships between entities",
+                sources=[
+                    PipelineSource(path="{streams}/world-model/entities.md", required=False),
+                    PipelineSource(path="{body}/working_set.json"),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=10),
+                model="haiku",
+                prompt="""Map relationships between tracked entities.
+
+Types of relationships:
+- depends_on: A requires B
+- contains: A includes B
+- causes: A leads to B
+- conflicts_with: A opposes B
+- similar_to: A is like B
+
+Output as a list of (entity_a, relationship, entity_b) triples.""",
+                output="world-model/relationships.md",
+                priority=3,
+                depends_on=["entity-tracker"],
+                runlevel=Runlevel.NORMAL,
+                boot_order=26,
+            ),
+            Pipeline(
+                name="state-predictor",
+                description="Predict future states based on current world model",
+                sources=[
+                    PipelineSource(path="{streams}/world-model/entities.md", required=False),
+                    PipelineSource(path="{streams}/world-model/relationships.md", required=False),
+                    PipelineSource(path="{body}/working_set.json"),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=10),
+                model="haiku",
+                prompt="""Based on the world model, predict:
+1. What will likely happen next? (most probable)
+2. What could go wrong? (risks)
+3. What opportunities exist?
+
+Be specific and actionable.""",
+                output="world-model/predictions.md",
+                priority=4,
+                depends_on=["entity-tracker", "relationship-mapper"],
+                runlevel=Runlevel.NORMAL,
+                boot_order=27,
+            ),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Intrinsic Motivation Template - Curiosity, coherence, progress signals
+    # -------------------------------------------------------------------------
+    DaemonGraphTemplate(
+        name="intrinsic-motivation",
+        description="Generates intrinsic reward signals: curiosity, coherence, progress",
+        version="1.0.0",
+        group="motivation",
+        runlevel=Runlevel.NORMAL,
+        tags=["core", "reward", "motivation"],
+        state_files=["motivation/curiosity.json", "motivation/coherence.json", "motivation/progress.json"],
+        parameters={"curiosity_weight": 0.3, "coherence_weight": 0.3, "progress_weight": 0.4},
+        daemons=[
+            Pipeline(
+                name="curiosity-signal",
+                description="Compute curiosity reward based on information gain",
+                sources=[
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                    PipelineSource(path="{streams}/world-model/predictions.md", required=False),
+                    PipelineSource(path="{body}/memory/episodes/*.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=5),
+                model="haiku",
+                prompt="""Assess information gain / curiosity reward.
+
+Consider:
+- Did we learn something new?
+- Was our prediction wrong (surprise)?
+- Are there unexplored areas?
+- Is there uncertainty we could reduce?
+
+Output a single number from -1.0 to 1.0:
+- Positive = learning new things, exploring
+- Negative = stuck, repeating, no new information
+- Zero = neutral
+
+Just output the number, e.g.: 0.45""",
+                output="motivation/curiosity-signal.md",
+                priority=5,
+                runlevel=Runlevel.NORMAL,
+                boot_order=40,
+            ),
+            Pipeline(
+                name="coherence-signal",
+                description="Compute coherence reward based on alignment with values",
+                sources=[
+                    PipelineSource(path="{body}/character.json"),
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                    PipelineSource(path="{body}/working_set.json"),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=10),
+                model="haiku",
+                prompt="""Assess coherence with agent's character and values.
+
+Consider:
+- Are current actions aligned with revealed preferences?
+- Is behavior consistent with past patterns?
+- Are we maintaining integrity?
+- Do goals align with values?
+
+Output a single number from -1.0 to 1.0:
+- Positive = acting in alignment with values
+- Negative = contradicting values, inconsistent
+- Zero = neutral
+
+Just output the number, e.g.: 0.65""",
+                output="motivation/coherence-signal.md",
+                priority=5,
+                runlevel=Runlevel.NORMAL,
+                boot_order=41,
+            ),
+            Pipeline(
+                name="progress-signal",
+                description="Compute progress reward based on goal advancement",
+                sources=[
+                    PipelineSource(path="{body}/working_set.json"),
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=3),
+                model="haiku",
+                prompt="""Assess progress toward goals.
+
+Consider:
+- Are we making progress on current goals?
+- Are we getting closer to completion?
+- Are we moving in the right direction?
+- Have we overcome obstacles?
+
+Output a single number from -1.0 to 1.0:
+- Positive = making progress, advancing
+- Negative = regressing, stuck, blocked
+- Zero = no change
+
+Just output the number, e.g.: 0.30""",
+                output="motivation/progress-signal.md",
+                priority=5,
+                runlevel=Runlevel.NORMAL,
+                boot_order=42,
+            ),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Goal Hierarchy Template - Goal decomposition and tracking
+    # -------------------------------------------------------------------------
+    DaemonGraphTemplate(
+        name="goal-hierarchy",
+        description="Automatic goal decomposition and subgoal tracking",
+        version="1.0.0",
+        group="planning",
+        runlevel=Runlevel.NORMAL,
+        tags=["core", "planning", "goals"],
+        state_files=["goals/hierarchy.json", "goals/subgoals.json", "goals/blockers.json"],
+        parameters={"max_depth": 3, "max_subgoals": 10},
+        daemons=[
+            Pipeline(
+                name="goal-decomposer",
+                description="Decompose high-level goals into subgoals",
+                sources=[
+                    PipelineSource(path="{body}/working_set.json"),
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=10),
+                model="haiku",
+                prompt="""Analyze current goals and decompose into subgoals.
+
+For each goal:
+1. Is it atomic (directly achievable) or composite?
+2. If composite, what are the subgoals?
+3. What is the dependency order?
+4. What is the estimated effort?
+
+Output a goal hierarchy. Max depth: ${max_depth}. Max subgoals per goal: ${max_subgoals}.""",
+                output="goals/decomposition.md",
+                priority=4,
+                runlevel=Runlevel.NORMAL,
+                boot_order=35,
+            ),
+            Pipeline(
+                name="blocker-detector",
+                description="Detect what's blocking goal progress",
+                sources=[
+                    PipelineSource(path="{body}/working_set.json"),
+                    PipelineSource(path="{streams}/goals/decomposition.md", required=False),
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=5),
+                model="haiku",
+                prompt="""Identify blockers preventing goal progress.
+
+For each active goal/subgoal:
+1. What is preventing progress?
+2. Is it a resource issue? Knowledge gap? External dependency?
+3. Can the blocker be removed? How?
+4. Should we work around it?
+
+Output blockers with suggested resolutions.""",
+                output="goals/blockers.md",
+                priority=3,
+                depends_on=["goal-decomposer"],
+                runlevel=Runlevel.NORMAL,
+                boot_order=36,
+            ),
+            Pipeline(
+                name="next-action-selector",
+                description="Select the next best action based on goal state",
+                sources=[
+                    PipelineSource(path="{streams}/goals/decomposition.md", required=False),
+                    PipelineSource(path="{streams}/goals/blockers.md", required=False),
+                    PipelineSource(path="{streams}/danger-assessment.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=3),
+                model="haiku",
+                prompt="""Given the goal hierarchy and blockers, what should the agent do next?
+
+Consider:
+- Unblocked subgoals (highest priority)
+- Blocker resolution actions
+- Danger mitigation if needed
+- Progress vs. exploration balance
+
+Output a specific, actionable next step.""",
+                output="goals/next-action.md",
+                priority=2,
+                depends_on=["goal-decomposer", "blocker-detector"],
+                runlevel=Runlevel.NORMAL,
+                boot_order=37,
+            ),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Theory of Mind Template - Model other agents/users
+    # -------------------------------------------------------------------------
+    DaemonGraphTemplate(
+        name="theory-of-mind",
+        description="Model beliefs, intentions, and mental states of other agents",
+        version="1.0.0",
+        group="cognition",
+        runlevel=Runlevel.FULL,
+        tags=["social", "cognition", "theory-of-mind"],
+        state_files=["tom/agents.json", "tom/beliefs.json", "tom/predictions.json"],
+        parameters={"max_agents": 10},
+        daemons=[
+            Pipeline(
+                name="agent-modeler",
+                description="Model other agents' beliefs and intentions",
+                sources=[
+                    PipelineSource(path="{body}/working_set.json"),
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                    PipelineSource(path="{body}/memory/episodes/*.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=10),
+                model="haiku",
+                prompt="""Model the mental states of other agents/users mentioned.
+
+For each agent (max ${max_agents}):
+1. What do they believe? (their knowledge state)
+2. What do they want? (their goals/intentions)
+3. What do they expect? (their predictions about us)
+4. How do they feel? (emotional state if relevant)
+
+Output agent models as structured descriptions.""",
+                output="tom/agent-models.md",
+                priority=6,
+                runlevel=Runlevel.FULL,
+                boot_order=55,
+            ),
+            Pipeline(
+                name="intention-predictor",
+                description="Predict what other agents will do",
+                sources=[
+                    PipelineSource(path="{streams}/tom/agent-models.md", required=False),
+                    PipelineSource(path="{streams}/situation.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=15),
+                model="haiku",
+                prompt="""Based on agent models, predict their likely actions.
+
+For each modeled agent:
+1. What will they probably do next?
+2. How might they react to our actions?
+3. What are they hoping we'll do?
+4. Where might we misunderstand them?
+
+Output predictions.""",
+                output="tom/predictions.md",
+                priority=6,
+                depends_on=["agent-modeler"],
+                runlevel=Runlevel.FULL,
+                boot_order=56,
+            ),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Meta-Cognition Template - Thinking about thinking
+    # -------------------------------------------------------------------------
+    DaemonGraphTemplate(
+        name="meta-cognition",
+        description="Monitor and optimize cognitive processes themselves",
+        version="1.0.0",
+        group="meta",
+        runlevel=Runlevel.FULL,
+        tags=["meta", "optimization", "self-improvement"],
+        state_files=["meta/patterns.json", "meta/improvements.json"],
+        parameters={},
+        daemons=[
+            Pipeline(
+                name="pattern-recognizer",
+                description="Recognize patterns in agent's own behavior",
+                sources=[
+                    PipelineSource(path="{body}/memory/episodes/*.md", required=False),
+                    PipelineSource(path="{body}/character.json"),
+                    PipelineSource(path="{streams}/self-reflection.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=20),
+                model="haiku",
+                prompt="""Analyze patterns in the agent's behavior and cognition.
+
+Look for:
+- Recurring mistakes or blind spots
+- Successful strategies that work well
+- Inefficient patterns that waste resources
+- Cognitive biases being exhibited
+
+Output patterns with evidence.""",
+                output="meta/patterns.md",
+                priority=8,
+                runlevel=Runlevel.FULL,
+                boot_order=70,
+            ),
+            Pipeline(
+                name="strategy-optimizer",
+                description="Suggest improvements to cognitive strategies",
+                sources=[
+                    PipelineSource(path="{streams}/meta/patterns.md", required=False),
+                    PipelineSource(path="{body}/character.json"),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=30),
+                model="haiku",
+                prompt="""Based on recognized patterns, suggest cognitive improvements.
+
+For each problematic pattern:
+1. What change would help?
+2. Is this a daemon configuration change?
+3. Is this a behavior change?
+4. How can we test the improvement?
+
+Output specific, implementable suggestions.""",
+                output="meta/improvements.md",
+                priority=8,
+                depends_on=["pattern-recognizer"],
+                runlevel=Runlevel.FULL,
+                boot_order=71,
+            ),
+            Pipeline(
+                name="daemon-optimizer",
+                description="Analyze and optimize the daemon system itself",
+                sources=[
+                    PipelineSource(path="{body}/unconscious/journal.jsonl", required=False),
+                    PipelineSource(path="{streams}/meta/patterns.md", required=False),
+                ],
+                trigger=PipelineTrigger(mode=TriggerMode.EVERY_N_STEPS, n_steps=50),
+                model="haiku",
+                prompt="""Analyze the daemon system's performance.
+
+Consider:
+- Which daemons are running too often/rarely?
+- Which daemons have high failure rates?
+- Are there missing capabilities?
+- Are resources being wasted?
+
+Output daemon system optimization suggestions.
+This is meta-meta: reasoning about the daemons that do the reasoning.""",
+                output="meta/daemon-optimizations.md",
+                priority=9,
+                runlevel=Runlevel.FULL,
+                boot_order=72,
+            ),
+        ],
+    ),
+]
+
+
+# Default reward sources
+DEFAULT_REWARD_SOURCES = [
+    RewardSource(
+        name="goal_completion",
+        source_type="goal_completion",
+        description="Reward for completing goals, penalty for failing them",
+        weight=1.0,
+    ),
+    RewardSource(
+        name="user_feedback",
+        source_type="user_feedback",
+        description="Reward from explicit user feedback",
+        weight=1.0,
+    ),
+    RewardSource(
+        name="curiosity",
+        source_type="curiosity",
+        description="Intrinsic reward for information gain and exploration",
+        compute_daemon="curiosity-signal",
+        weight=0.3,
+    ),
+    RewardSource(
+        name="coherence",
+        source_type="coherence",
+        description="Intrinsic reward for alignment with values and consistency",
+        compute_daemon="coherence-signal",
+        weight=0.3,
+    ),
+    RewardSource(
+        name="progress",
+        source_type="progress",
+        description="Intrinsic reward for making progress toward goals",
+        compute_daemon="progress-signal",
+        weight=0.4,
+    ),
+]
+
+
+# New process groups for template subsystems
+EXTENDED_GROUPS = {
+    **DEFAULT_GROUPS,
+    "cognition": ProcessGroup(
+        name="cognition",
+        description="World modeling and higher cognition",
+        priority=4,
+        budget=TokenBudget(
+            max_tokens_per_run=1200,
+            max_tokens_per_step=4000,
+            max_tokens_per_hour=60000,
+        ),
+        max_concurrent=3,
+    ),
+    "motivation": ProcessGroup(
+        name="motivation",
+        description="Intrinsic motivation signals",
+        priority=5,
+        budget=TokenBudget(
+            max_tokens_per_run=500,
+            max_tokens_per_step=1500,
+            max_tokens_per_hour=25000,
+        ),
+        max_concurrent=3,
+    ),
+    "planning": ProcessGroup(
+        name="planning",
+        description="Goal decomposition and planning",
+        priority=3,
+        budget=TokenBudget(
+            max_tokens_per_run=1000,
+            max_tokens_per_step=3000,
+            max_tokens_per_hour=45000,
+        ),
+        max_concurrent=2,
+    ),
+    "meta": ProcessGroup(
+        name="meta",
+        description="Meta-cognition and self-optimization",
+        priority=8,
+        budget=TokenBudget(
+            max_tokens_per_run=800,
+            max_tokens_per_step=2000,
+            max_tokens_per_hour=30000,
+        ),
+        max_concurrent=1,
+    ),
+}
+
+
+def install_default_templates(unconscious_dir: UnconsciousDirectory):
+    """Install default daemon graph templates."""
+    existing = unconscious_dir.list_templates()
+    existing_names = [t["name"] for t in existing]
+
+    for template in DEFAULT_TEMPLATES:
+        if template.name not in existing_names:
+            unconscious_dir.save_template(template)
+
+
+def install_default_reward_sources(unconscious_dir: UnconsciousDirectory):
+    """Install default reward sources."""
+    existing = unconscious_dir.load_reward_sources()
+    existing_names = [s.name for s in existing]
+
+    for source in DEFAULT_REWARD_SOURCES:
+        if source.name not in existing_names:
+            unconscious_dir.add_reward_source(source)
+
+
+def install_extended_groups(unconscious_dir: UnconsciousDirectory):
+    """Install extended process groups for template subsystems."""
+    existing = unconscious_dir.load_groups()
+    for name, group in EXTENDED_GROUPS.items():
+        if name not in existing:
+            existing[name] = group
+    unconscious_dir.save_groups(existing)

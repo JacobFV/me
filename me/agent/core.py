@@ -532,6 +532,125 @@ Run ID: `{self._run_id}`
                 lines.append(f"  {daemon_name}: {weighted:.3f}")
             return {"content": [{"type": "text", "text": "\n".join(lines)}]}
 
+        # =================================================================
+        # Daemon Graph Templates (Higher-Order Operations)
+        # =================================================================
+
+        @tool("spawn_template", "Spawn an entire daemon subsystem from a template", {"template": str, "prefix": str})
+        async def spawn_template(args: dict[str, Any]) -> dict[str, Any]:
+            template_name = args["template"]
+            prefix = args.get("prefix", "")
+
+            created = await self.unconscious.spawn_template(
+                template_name=template_name,
+                prefix=prefix,
+                start_immediately=True,
+            )
+
+            if not created:
+                return {"content": [{"type": "text", "text": f"Template not found or failed: {template_name}"}]}
+
+            lines = [f"Spawned template '{template_name}' with {len(created)} daemons:"]
+            for name in created:
+                lines.append(f"  - {name}")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
+        @tool("despawn_template", "Remove all daemons from a spawned template", {"template": str, "prefix": str})
+        async def despawn_template(args: dict[str, Any]) -> dict[str, Any]:
+            template_name = args["template"]
+            prefix = args.get("prefix", "")
+
+            removed = await self.unconscious.despawn_template(template_name, prefix)
+
+            if not removed:
+                return {"content": [{"type": "text", "text": f"No daemons found for template: {template_name}"}]}
+
+            return {"content": [{"type": "text", "text": f"Removed {len(removed)} daemons from template '{template_name}'"}]}
+
+        @tool("list_templates", "List available daemon graph templates", {})
+        async def list_templates(args: dict[str, Any]) -> dict[str, Any]:
+            templates = self.unconscious_dir.list_templates()
+            if not templates:
+                return {"content": [{"type": "text", "text": "No templates available."}]}
+
+            lines = ["Available daemon graph templates:"]
+            for t in templates:
+                lines.append(f"  {t['name']} ({t['daemon_count']} daemons)")
+                if t.get('description'):
+                    lines.append(f"    {t['description']}")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
+        @tool("list_spawned", "List which templates have been spawned", {})
+        async def list_spawned(args: dict[str, Any]) -> dict[str, Any]:
+            spawned = self.unconscious.list_spawned_templates()
+            if not spawned:
+                return {"content": [{"type": "text", "text": "No templates currently spawned."}]}
+
+            lines = ["Spawned templates:"]
+            for template_name, daemons in spawned.items():
+                lines.append(f"  {template_name}:")
+                for d in daemons:
+                    lines.append(f"    - {d}")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
+        # =================================================================
+        # Reward Sources & User Feedback
+        # =================================================================
+
+        @tool("emit_reward", "Emit a reward from a source", {"reward": float, "task": str, "source": str})
+        async def emit_reward(args: dict[str, Any]) -> dict[str, Any]:
+            reward = args.get("reward", 0.0)
+            task = args.get("task", "")
+            source = args.get("source", "agent")
+
+            attribution = self.unconscious.emit_reward(reward, task, source)
+            lines = [f"Reward {reward:.2f} emitted from '{source}'"]
+            if attribution:
+                lines.append("Attribution:")
+                for name, weighted in sorted(attribution.items(), key=lambda x: -abs(x[1]))[:5]:
+                    lines.append(f"  {name}: {weighted:.3f}")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
+        @tool("record_feedback", "Record user feedback as reward signal", {"feedback": str, "sentiment": float, "context": str})
+        async def record_feedback(args: dict[str, Any]) -> dict[str, Any]:
+            feedback = args["feedback"]
+            sentiment = args.get("sentiment")  # None to infer
+            context = args.get("context", "")
+
+            if sentiment is not None:
+                sentiment = float(sentiment)
+
+            result = self.unconscious.record_user_feedback(feedback, sentiment, context)
+            return {"content": [{"type": "text", "text": f"Feedback recorded with sentiment: {result:.2f}"}]}
+
+        @tool("compute_intrinsic", "Compute intrinsic motivation rewards", {})
+        async def compute_intrinsic(args: dict[str, Any]) -> dict[str, Any]:
+            rewards = await self.unconscious.compute_intrinsic_rewards()
+            if not rewards:
+                return {"content": [{"type": "text", "text": "No intrinsic reward sources configured or computed."}]}
+
+            lines = ["Intrinsic rewards computed:"]
+            total = 0.0
+            for source, value in rewards.items():
+                lines.append(f"  {source}: {value:.3f}")
+                total += value
+            lines.append(f"  Total: {total:.3f}")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
+        @tool("list_reward_sources", "List configured reward sources", {})
+        async def list_reward_sources(args: dict[str, Any]) -> dict[str, Any]:
+            sources = self.unconscious_dir.load_reward_sources()
+            if not sources:
+                return {"content": [{"type": "text", "text": "No reward sources configured."}]}
+
+            lines = ["Reward sources:"]
+            for s in sources:
+                status = "enabled" if s.enabled else "disabled"
+                lines.append(f"  {s.name} ({s.source_type}) [{status}] weight={s.weight:.2f}")
+                if s.compute_daemon:
+                    lines.append(f"    compute_daemon: {s.compute_daemon}")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
         return [
             run_command,
             send_input,
@@ -549,6 +668,16 @@ Run ID: `{self._run_id}`
             change_runlevel,
             set_focus,
             attribute_reward,
+            # Daemon Graph Templates
+            spawn_template,
+            despawn_template,
+            list_templates,
+            list_spawned,
+            # Reward Sources
+            emit_reward,
+            record_feedback,
+            compute_intrinsic,
+            list_reward_sources,
         ]
 
     def _build_options(self) -> ClaudeAgentOptions:
@@ -583,6 +712,16 @@ Run ID: `{self._run_id}`
             # Focus & reward (Semantic Routing)
             "mcp__self__set_focus",
             "mcp__self__attribute_reward",
+            # Daemon Graph Templates (Higher-Order)
+            "mcp__self__spawn_template",
+            "mcp__self__despawn_template",
+            "mcp__self__list_templates",
+            "mcp__self__list_spawned",
+            # Reward Sources
+            "mcp__self__emit_reward",
+            "mcp__self__record_feedback",
+            "mcp__self__compute_intrinsic",
+            "mcp__self__list_reward_sources",
         ]
 
         for mcp_name in self.mcp_registry.list():

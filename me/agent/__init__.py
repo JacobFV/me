@@ -39,6 +39,19 @@ from me.agent.unconscious import (
     # Semantic routing
     DaemonProfile,
     cosine_similarity,
+    # Daemon Graph Templates (Higher-Order Abstraction)
+    DaemonGraphTemplate,
+    RewardSource,
+    MetaDaemon,
+    MetaDaemonCapability,
+    # Default installations
+    install_default_pipelines,
+    install_default_templates,
+    install_default_reward_sources,
+    install_extended_groups,
+    DEFAULT_TEMPLATES,
+    DEFAULT_REWARD_SOURCES,
+    EXTENDED_GROUPS,
 )
 from me.agent.memory import Memory
 from me.agent.mcp import MCPRegistry
@@ -86,6 +99,19 @@ __all__ = [
     # Semantic routing
     "DaemonProfile",
     "cosine_similarity",
+    # Daemon Graph Templates (Higher-Order Abstraction)
+    "DaemonGraphTemplate",
+    "RewardSource",
+    "MetaDaemon",
+    "MetaDaemonCapability",
+    # Default installations
+    "install_default_pipelines",
+    "install_default_templates",
+    "install_default_reward_sources",
+    "install_extended_groups",
+    "DEFAULT_TEMPLATES",
+    "DEFAULT_REWARD_SOURCES",
+    "EXTENDED_GROUPS",
     # Other components
     "Memory",
     "MCPRegistry",
