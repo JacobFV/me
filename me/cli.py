@@ -44,6 +44,8 @@ def main():
 @click.option("--parent", "-p", default=None, help="Parent agent ID (for child agents)")
 @click.option("--cwd", "-d", type=click.Path(exists=True, path_type=Path), default=None, help="Working directory")
 @click.option("--interactive", "-i", is_flag=True, help="Run in interactive mode")
+@click.option("--tui/--no-tui", default=True, help="Use TUI for interactive mode (default: enabled)")
+@click.option("--verbose", "-v", is_flag=True, help="Show verbose tool call output")
 def run(
     prompt: tuple[str, ...],
     name: str,
@@ -53,6 +55,8 @@ def run(
     parent: str | None,
     cwd: Path | None,
     interactive: bool,
+    tui: bool,
+    verbose: bool,
 ):
     """Run the agent with a prompt."""
     prompt_text = " ".join(prompt) if prompt else None
@@ -73,12 +77,39 @@ def run(
     agent = Agent(config)
 
     if interactive:
-        run_async(_interactive_session(agent, prompt_text))
+        if tui:
+            # Use Textual TUI
+            from me.tui import run_tui
+            run_async(run_tui(agent, prompt_text))
+        else:
+            # Use simple CLI
+            run_async(_interactive_session(agent, prompt_text, verbose=verbose))
     else:
-        run_async(_single_run(agent, prompt_text))
+        run_async(_single_run(agent, prompt_text, verbose=verbose))
 
 
-async def _single_run(agent: Agent, prompt: str):
+def _format_tool_call(block, verbose: bool = False) -> str:
+    """Format a tool call for display."""
+    if not verbose:
+        return f"[Tool: {block.name}]"
+
+    # Verbose output with parameters
+    parts = [f"[Tool: {block.name}"]
+    if block.input:
+        params = []
+        for key, value in list(block.input.items())[:5]:
+            if isinstance(value, str):
+                if len(value) > 60:
+                    value = value[:60] + "..."
+                value = value.replace("\n", "\\n")
+            params.append(f"{key}={value}")
+        if params:
+            parts.append(f"({', '.join(params)})")
+    parts.append("]")
+    return "".join(parts)
+
+
+async def _single_run(agent: Agent, prompt: str, verbose: bool = False):
     """Run a single agent interaction."""
     from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock, ResultMessage
 
@@ -91,7 +122,7 @@ async def _single_run(agent: Agent, prompt: str):
                 if isinstance(block, TextBlock):
                     click.echo(block.text)
                 elif isinstance(block, ToolUseBlock):
-                    click.echo(f"\n[Tool: {block.name}]", nl=False)
+                    click.echo(f"\n{_format_tool_call(block, verbose)}", nl=False)
 
         elif isinstance(message, ResultMessage):
             click.echo()
@@ -100,12 +131,13 @@ async def _single_run(agent: Agent, prompt: str):
                 click.echo(f"Cost: ${message.total_cost_usd:.4f}")
 
 
-async def _interactive_session(agent: Agent, initial_prompt: str | None):
-    """Run an interactive agent session."""
+async def _interactive_session(agent: Agent, initial_prompt: str | None, verbose: bool = False):
+    """Run an interactive agent session (simple CLI mode)."""
     from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock, ResultMessage
 
     click.echo(f"[{agent.config.agent_id}] Interactive session started")
     click.echo("Type 'exit' or 'quit' to end the session")
+    click.echo("Use --tui for better editing experience")
     click.echo()
 
     first_run = True
@@ -120,7 +152,7 @@ async def _interactive_session(agent: Agent, initial_prompt: str | None):
             except click.Abort:
                 break
 
-        if prompt.lower() in ("exit", "quit"):
+        if prompt.lower() in ("exit", "quit", "/exit", "/quit"):
             break
 
         if prompt.startswith("/"):
@@ -142,6 +174,7 @@ async def _interactive_session(agent: Agent, initial_prompt: str | None):
                 click.echo("  /memory - Show memory stats")
                 click.echo("  /mcps   - List MCP servers")
                 click.echo("  /help   - Show this help")
+                click.echo("  /exit   - Exit session")
             else:
                 click.echo(f"Unknown command: {prompt}")
             continue
@@ -154,7 +187,7 @@ async def _interactive_session(agent: Agent, initial_prompt: str | None):
                     if isinstance(block, TextBlock):
                         click.echo(block.text, nl=False)
                     elif isinstance(block, ToolUseBlock):
-                        click.echo(f"\n[{block.name}]", nl=False)
+                        click.echo(f"\n{_format_tool_call(block, verbose)}", nl=False)
             elif isinstance(message, ResultMessage):
                 click.echo()
 

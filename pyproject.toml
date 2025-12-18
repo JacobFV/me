@@ -12,6 +12,8 @@ dependencies = [
     "click>=8.1.0",
     "psutil>=6.0.0",
     "filepydantic",
+    "textual>=0.47.0",
+    "rich>=13.0.0",
 ]
 
 [tool.setuptools.packages.find]
