@@ -130,6 +130,21 @@ from me.agent.communication import (
     SharedBlackboard,
     AgentBus,
 )
+from me.agent.planning import (
+    Goal,
+    GoalStatus,
+    GoalPriority,
+    GoalGraph,
+    Plan,
+    PlanStep,
+    PlanStatus,
+    Planner,
+    PlanningStrategy,
+    PlanEvaluator,
+    StrategicReasoner,
+    StrategicInsight,
+    StrategicPlanningSystem,
+)
 
 __all__ = [
     # Core
@@ -254,4 +269,18 @@ __all__ = [
     "AgentDirectory",
     "SharedBlackboard",
     "AgentBus",
+    # Planning
+    "Goal",
+    "GoalStatus",
+    "GoalPriority",
+    "GoalGraph",
+    "Plan",
+    "PlanStep",
+    "PlanStatus",
+    "Planner",
+    "PlanningStrategy",
+    "PlanEvaluator",
+    "StrategicReasoner",
+    "StrategicInsight",
+    "StrategicPlanningSystem",
 ]
