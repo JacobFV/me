@@ -735,6 +735,7 @@ Run ID: `{self._run_id}`
             cwd=str(self.config.cwd),
             max_turns=self.config.max_turns,
             model=self.config.model,
+            include_partial_messages=True,  # Enable streaming
         )
 
     async def run(self, prompt: str) -> AsyncIterator[Message]:
