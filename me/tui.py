@@ -23,7 +23,6 @@ from textual.widgets import (
     Footer,
     Static,
     Input,
-    TextArea,
     RichLog,
     Label,
     Collapsible,
@@ -224,14 +223,11 @@ class AgentTUI(App):
 
     #input-container {
         height: auto;
-        max-height: 8;
         padding: 1;
     }
 
     #prompt-input {
-        height: auto;
-        min-height: 3;
-        max-height: 6;
+        width: 100%;
     }
 
     #help-text {
@@ -269,11 +265,11 @@ class AgentTUI(App):
         yield StatusBar(id="status-bar")
         yield ChatHistory(id="chat-history")
         yield Container(
-            TextArea(id="prompt-input", language=None),
+            Input(placeholder="Type a message (Enter to send, /help for commands)", id="prompt-input"),
             id="input-container"
         )
         yield Static(
-            "[dim]Enter: send | Shift+Enter: newline | Ctrl+C: quit | /help for commands[/]",
+            "[dim]Enter: send | Ctrl+C: quit | /help for commands[/]",
             id="help-text"
         )
 
@@ -287,7 +283,7 @@ class AgentTUI(App):
         )
 
         # Focus the input
-        self.query_one("#prompt-input", TextArea).focus()
+        self.query_one("#prompt-input", Input).focus()
 
         # Send initial prompt if provided
         if self.initial_prompt:
@@ -297,22 +293,13 @@ class AgentTUI(App):
         """Send the initial prompt after mount."""
         await self._process_input(self.initial_prompt)
 
-    def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Handle text area changes."""
-        pass
-
-    async def on_key(self, event) -> None:
-        """Handle key events."""
-        input_widget = self.query_one("#prompt-input", TextArea)
-
-        if event.key == "enter" and not event.shift:
-            # Submit on Enter (without Shift)
-            if not self._processing:
-                text = input_widget.text.strip()
-                if text:
-                    input_widget.clear()
-                    await self._process_input(text)
-            event.prevent_default()
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key in input field."""
+        if not self._processing:
+            text = event.value.strip()
+            if text:
+                event.input.clear()
+                await self._process_input(text)
 
     async def _process_input(self, text: str):
         """Process user input."""
@@ -432,7 +419,7 @@ class AgentTUI(App):
 
     def action_clear_input(self):
         """Clear the input field."""
-        self.query_one("#prompt-input", TextArea).clear()
+        self.query_one("#prompt-input", Input).clear()
 
     def action_clear_history(self):
         """Clear chat history."""
