@@ -1,0 +1,32 @@
+[project]
+name = "me"
+version = "0.1.0"
+description = "Self-model agent: uploading 'me' into a computer"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.1.0",
+    "numpy>=2.0.0",
+    "sentence-transformers>=3.0.0",
+    "chromadb>=0.5.0",
+    "click>=8.1.0",
+    "psutil>=6.0.0",
+    "filepydantic",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["me*"]
+exclude = ["artifacts*", "tests*"]
+
+[tool.uv.sources]
+filepydantic = { path = "../filepydantic", editable = true }
+
+[project.scripts]
+me = "me.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
