@@ -57,6 +57,80 @@ from me.agent.memory import Memory
 from me.agent.mcp import MCPRegistry
 from me.agent.process import ProcessReader
 
+# Learning and metacognition
+from me.agent.learning import (
+    ExperienceBuffer,
+    Experience,
+    ExperienceType,
+    PredictionTracker,
+    Prediction,
+    ProcedureUpdater,
+    ProcedureStats,
+    PatternExtractor,
+    Pattern,
+    TheoryRefiner,
+    Evidence,
+    ExperienceReplay,
+)
+from me.agent.skills import (
+    Skill,
+    SkillType,
+    SkillStatus,
+    SkillLibrary,
+    SkillExtractor,
+    SkillComposer,
+    SkillTransfer,
+    SkillSystem,
+)
+from me.agent.metacognition import (
+    PerformanceMonitor,
+    PerformanceSnapshot,
+    CognitiveMetric,
+    StuckDetector,
+    StuckDetection,
+    StuckType,
+    StrategyTracker,
+    Strategy,
+    AdaptationEngine,
+    Adaptation,
+    NoveltyDetector,
+    MetaCognitiveMonitor,
+)
+
+# World model and causality
+from me.agent.world_model import (
+    FileSystemModel,
+    FileNode,
+    FileType,
+    ProcessModel,
+    ProcessNode,
+    TransitionModel,
+    StateTransition,
+    WorldModel,
+)
+from me.agent.causality import (
+    CausalGraph,
+    CausalEdge,
+    CausalRelationType,
+    CausalObservation,
+    CausalDiscovery,
+    CounterfactualReasoner,
+    Counterfactual,
+    InterventionPlanner,
+    Intervention,
+    CausalReasoner,
+)
+from me.agent.communication import (
+    Message,
+    MessageType,
+    MessagePriority,
+    Channel,
+    AgentInfo,
+    AgentDirectory,
+    SharedBlackboard,
+    AgentBus,
+)
+
 __all__ = [
     # Core
     "Agent",
@@ -116,4 +190,68 @@ __all__ = [
     "Memory",
     "MCPRegistry",
     "ProcessReader",
+    # Learning
+    "ExperienceBuffer",
+    "Experience",
+    "ExperienceType",
+    "PredictionTracker",
+    "Prediction",
+    "ProcedureUpdater",
+    "ProcedureStats",
+    "PatternExtractor",
+    "Pattern",
+    "TheoryRefiner",
+    "Evidence",
+    "ExperienceReplay",
+    # Skills
+    "Skill",
+    "SkillType",
+    "SkillStatus",
+    "SkillLibrary",
+    "SkillExtractor",
+    "SkillComposer",
+    "SkillTransfer",
+    "SkillSystem",
+    # Metacognition
+    "PerformanceMonitor",
+    "PerformanceSnapshot",
+    "CognitiveMetric",
+    "StuckDetector",
+    "StuckDetection",
+    "StuckType",
+    "StrategyTracker",
+    "Strategy",
+    "AdaptationEngine",
+    "Adaptation",
+    "NoveltyDetector",
+    "MetaCognitiveMonitor",
+    # World Model
+    "FileSystemModel",
+    "FileNode",
+    "FileType",
+    "ProcessModel",
+    "ProcessNode",
+    "TransitionModel",
+    "StateTransition",
+    "WorldModel",
+    # Causality
+    "CausalGraph",
+    "CausalEdge",
+    "CausalRelationType",
+    "CausalObservation",
+    "CausalDiscovery",
+    "CounterfactualReasoner",
+    "Counterfactual",
+    "InterventionPlanner",
+    "Intervention",
+    "CausalReasoner",
+    # Communication
+    "Message",
+    "MessageType",
+    "MessagePriority",
+    "Channel",
+    "AgentInfo",
+    "AgentDirectory",
+    "SharedBlackboard",
+    "AgentBus",
 ]
