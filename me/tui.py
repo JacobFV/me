@@ -151,7 +151,7 @@ class ChatHistory(ScrollableContainer):
 
     def add_separator(self):
         """Add a visual separator."""
-        self.mount(Rule(style="dim"))
+        self.mount(Rule())
         self.scroll_end(animate=False)
 
 
