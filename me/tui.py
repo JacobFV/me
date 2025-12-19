@@ -54,6 +54,7 @@ SLASH_COMMANDS = {
     "/body": "Show agent body state",
     "/memory": "Show memory stats",
     "/goals": "Show current goals",
+    "/skills": "Show skill status",
     "/queue": "Focus message queue",
     "/clear": "Clear chat history",
     "/exit": "Exit the TUI",
@@ -232,6 +233,18 @@ class StatsPanel(Static):
         if len(body.working_set.goals) > 3:
             goals_text += f"\n  [#484f58]+{len(body.working_set.goals) - 3} more[/]"
 
+        # Skills summary
+        try:
+            skill_stats = body.skills.get_statistics()
+            learned = skill_stats.get('learned', 0)
+            developing = skill_stats.get('developing', 0)
+            active_now = skill_stats.get('active_now', 0)
+            skills_text = f"[#c9d1d9]{learned}[/][#484f58]L[/] [#c9d1d9]{developing}[/][#484f58]D[/]"
+            if active_now > 0:
+                skills_text += f" [#58a6ff]({active_now})[/]"
+        except Exception:
+            skills_text = "[#484f58]?[/]"
+
         # Build stats display
         mood = body.embodiment.mood or "neutral"
         stats = f"""[#8b949e bold]Agent[/]
@@ -245,6 +258,9 @@ class StatsPanel(Static):
 
 [#8b949e bold]Memory[/]
 [#484f58]stored[/] [#c9d1d9]{memories}[/]
+
+[#8b949e bold]Skills[/]
+{skills_text}
 
 [#8b949e bold]Goals[/]
 {goals_text}
@@ -767,6 +783,38 @@ class AgentTUI(App):
             else:
                 goals_text = "No active goals."
             chat.add_agent_message(goals_text)
+        elif cmd == "/skills":
+            try:
+                skills = self.agent.body.skills
+                stats = skills.get_statistics()
+                lines = ["**Skills:**"]
+                lines.append(f"- Learned: {stats['learned']}")
+                lines.append(f"- Developing: {stats['developing']}")
+                lines.append(f"- Atrophied: {stats['atrophied']}")
+                lines.append(f"- Active: {stats['active_now']}")
+                lines.append(f"- Total uses: {stats['total_uses']}")
+
+                # Show active skills
+                active = skills.get_active_skills()
+                if active:
+                    lines.append("\n**Active Skills:**")
+                    for skill in active:
+                        lines.append(f"- `{skill.metadata.name}` ({skill.metadata.proficiency:.0%})")
+
+                # Show learned skills
+                from me.agent.skills import SkillState
+                learned = skills.list_skills(SkillState.LEARNED)
+                if learned:
+                    lines.append("\n**Learned:**")
+                    for meta in learned[:5]:
+                        active_mark = " ◆" if meta.is_active else ""
+                        lines.append(f"- {meta.name}: {meta.proficiency:.0%}{active_mark}")
+                    if len(learned) > 5:
+                        lines.append(f"  *+{len(learned) - 5} more*")
+
+                chat.add_agent_message("\n".join(lines))
+            except Exception as e:
+                chat.add_agent_message(f"**Error loading skills:** {e}")
         elif cmd == "/queue":
             queue = self.query_one("#queue-panel", QueuePanel)
             if queue.is_empty():

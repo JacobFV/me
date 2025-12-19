@@ -144,6 +144,10 @@ Your body IS a directory at `{self.body.root}`. Everything about you is a file:
 │   ├── significant/    # Write .md: mark significant moments
 │   ├── intentions/     # Write .md: set future reminders
 │   └── theories/       # Write .md: form working theories
+├── skills/
+│   ├── learned/        # Mastered skills (proficiency >= 80%)
+│   ├── developing/     # Skills being learned
+│   └── atrophied/      # Unused skills (can be relearned)
 ├── unconscious/
 │   ├── pipelines/      # Edit .yaml: define perception pipelines
 │   ├── streams/        # Read: pre-processed abstractions
@@ -180,6 +184,41 @@ transform raw data into compressed representations you can attend to.
 **To see pre-processed situation**: Read unconscious/streams/situation.md.
 **To run a pipeline now**: Use the `run_pipeline` tool.
 
+## Your Skills
+
+Skills are learned capabilities that become part of your body. They live in `skills/`:
+- `learned/` - Mastered skills (proficiency >= 80%)
+- `developing/` - Skills being learned
+- `atrophied/` - Skills unused for 30+ days (can be relearned faster)
+
+Each skill is a directory with a SKILL.md file:
+```markdown
+---
+name: git-workflow
+description: Git branching and merging workflow
+version: 1.0.0
+tags: [git, version-control]
+---
+
+## Overview
+Instructions for this skill...
+
+## Steps
+1. First step
+2. Second step
+```
+
+**Skill lifecycle:**
+1. Codify a pattern → skill starts in `developing/`
+2. Use successfully → proficiency increases
+3. Reach 80% proficiency → graduates to `learned/`
+4. Stop using for 30 days → moves to `atrophied/`
+5. Use an atrophied skill → relearns faster
+
+**To codify a skill**: Use `codify_skill` with name, description, instructions
+**To activate a skill**: Use `activate_skill` to load instructions into context
+**To track proficiency**: Use `use_skill` after applying a skill
+
 {body_info}
 
 ## Essential Tools
@@ -199,6 +238,15 @@ The only special tools you have are for things that CAN'T be file operations:
 ### MCP Servers
 - `register_mcp` - Add capability servers at runtime
 - `unregister_mcp` - Remove capability servers
+
+### Skills
+- `activate_skill` - Load a skill into conscious attention
+- `deactivate_skill` - Remove from conscious attention
+- `list_skills` - Show all skills and proficiency
+- `use_skill` - Record skill usage (updates proficiency)
+- `codify_skill` - Create a new skill from experience
+- `search_skills` - Find skills by name/description/tags
+- `recommend_skills` - Get skill recommendations for context
 
 ## Memory Format
 
@@ -710,31 +758,237 @@ Run ID: `{self._run_id}`
                     lines.append(f"    compute_daemon: {s.compute_daemon}")
             return "\n".join(lines)
 
+        # =================================================================
+        # Skills (learned capabilities)
+        # =================================================================
+
+        @tool
+        async def activate_skill(name: str) -> str:
+            """Activate a skill - bring it into conscious attention.
+
+            Loads the full skill instructions and makes them available.
+            Active skills appear in your context and can be used.
+
+            Args:
+                name: Name of the skill to activate
+            """
+            skill = agent_self.body.skills.activate_skill(name)
+            if not skill:
+                available = [s.name for s in agent_self.body.skills.list_skills()[:5]]
+                return f"Skill not found: {name}\nAvailable: {', '.join(available)}"
+
+            return f"""Skill activated: {skill.metadata.name}
+Proficiency: {skill.metadata.proficiency:.0%}
+State: {skill.metadata.state.value}
+
+{skill.instructions[:1500]}{'...' if len(skill.instructions) > 1500 else ''}"""
+
+        @tool
+        async def deactivate_skill(name: str) -> str:
+            """Deactivate a skill - remove from conscious attention.
+
+            Args:
+                name: Name of the skill to deactivate
+            """
+            success = agent_self.body.skills.deactivate_skill(name)
+            return f"Deactivated skill: {name}" if success else f"Skill not found: {name}"
+
+        @tool
+        async def list_skills(state: str = "") -> str:
+            """List available skills.
+
+            Args:
+                state: Filter by state: 'learned', 'developing', 'atrophied', or empty for all
+            """
+            from me.agent.skills import SkillState
+
+            filter_state = None
+            if state:
+                try:
+                    filter_state = SkillState(state.lower())
+                except ValueError:
+                    return f"Invalid state: {state}. Use: learned, developing, atrophied"
+
+            skills = agent_self.body.skills.list_skills(filter_state)
+            if not skills:
+                return "No skills acquired yet.\nUse codify_skill to create skills from your experience."
+
+            lines = ["Skills:"]
+            current_state = None
+            for skill in sorted(skills, key=lambda s: (s.state.value, -s.proficiency)):
+                if skill.state != current_state:
+                    current_state = skill.state
+                    lines.append(f"\n**{current_state.value.title()}:**")
+
+                active = " (active)" if skill.is_active else ""
+                lines.append(f"  {skill.name}: {skill.proficiency:.0%}{active}")
+                if skill.description:
+                    lines.append(f"    {skill.description[:60]}...")
+
+            stats = agent_self.body.skills.get_statistics()
+            lines.append(f"\nTotal: {stats['total_skills']} skills, {stats['total_uses']} total uses")
+
+            return "\n".join(lines)
+
+        @tool
+        async def use_skill(name: str, success: bool = True, context: str = "", outcome: str = "") -> str:
+            """Record that you used a skill (updates proficiency).
+
+            Call this after applying a skill to track your proficiency.
+            Success/failure affects proficiency computation.
+
+            Args:
+                name: Name of the skill used
+                success: Whether the skill application was successful
+                context: What you were doing
+                outcome: What happened
+            """
+            meta = agent_self.body.skills.record_usage(
+                name=name,
+                success=success,
+                context=context,
+                outcome=outcome,
+            )
+            if not meta:
+                return f"Skill not found: {name}"
+
+            state_change = ""
+            # Check if state changed (would need to compare before/after)
+            return f"""Skill usage recorded: {name}
+Uses: {meta.use_count} ({meta.success_count} successes)
+Proficiency: {meta.proficiency:.0%}
+State: {meta.state.value}{state_change}"""
+
+        @tool
+        async def codify_skill(
+            name: str,
+            description: str,
+            instructions: str,
+            tags: str = "",
+            domains: str = "",
+        ) -> str:
+            """Create a new skill from your experience.
+
+            When you discover a useful pattern, codify it as a skill.
+            Skills start in 'developing' state and graduate to 'learned'
+            as you use them successfully.
+
+            Args:
+                name: Skill name (lowercase, hyphenated)
+                description: Brief description of what the skill does
+                instructions: Full instructions for the skill (markdown)
+                tags: Comma-separated tags
+                domains: Comma-separated domains where skill applies
+            """
+            tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+            domain_list = [d.strip() for d in domains.split(",") if d.strip()] if domains else None
+
+            skill = agent_self.body.skills.codify_skill(
+                name=name,
+                description=description,
+                instructions=instructions,
+                tags=tag_list,
+                domains=domain_list,
+            )
+
+            return f"""Skill codified: {skill.metadata.name}
+State: developing (will graduate to learned at 80% proficiency)
+Path: {agent_self.body.skills_dir / 'developing' / name}
+
+To use this skill:
+1. activate_skill('{name}') - Load instructions
+2. Apply the skill
+3. use_skill('{name}', success=True/False) - Track proficiency"""
+
+        @tool
+        async def search_skills(query: str) -> str:
+            """Search skills by name, description, or tags.
+
+            Args:
+                query: Search query
+            """
+            results = agent_self.body.skills.search_skills(query, top_k=10)
+            if not results:
+                return f"No skills match: {query}"
+
+            lines = [f"Skills matching '{query}':"]
+            for skill in results:
+                active = " (active)" if skill.is_active else ""
+                lines.append(f"  {skill.name}: {skill.proficiency:.0%}{active} [{skill.state.value}]")
+                lines.append(f"    {skill.description[:80]}")
+
+            return "\n".join(lines)
+
+        @tool
+        async def recommend_skills(goal: str = "") -> str:
+            """Get skill recommendations for current context.
+
+            Args:
+                goal: Optional goal to optimize recommendations for
+            """
+            context = {
+                "cwd": str(agent_self.config.cwd),
+            }
+
+            recommendations = agent_self.body.skills.recommend_for_context(context, top_k=5)
+            if goal:
+                goal_relevant = agent_self.body.skills.search_skills(goal)
+                seen = {s.name for s in recommendations}
+                for skill in goal_relevant[:3]:
+                    if skill.name not in seen:
+                        recommendations.append(skill)
+
+            if not recommendations:
+                return "No skill recommendations. Codify some skills from your experience!"
+
+            lines = ["Recommended skills:"]
+            for skill in recommendations[:8]:
+                active = " (active)" if skill.is_active else ""
+                lines.append(f"  {skill.name}: {skill.proficiency:.0%}{active}")
+                lines.append(f"    {skill.description[:60]}")
+
+            return "\n".join(lines)
+
         return [
+            # Process control
             run_command,
             send_input,
             read_output,
             spawn_child_agent,
+            # Semantic memory
             store_memory,
             recall_memories,
+            # MCP
             register_mcp,
             unregister_mcp,
+            # Unconscious / perception
             run_pipeline,
             step_unconscious,
+            # Daemon control
             daemon_ctl,
             daemon_list,
             journal_query,
             change_runlevel,
+            # Focus & reward
             set_focus,
             attribute_reward,
-            spawn_template,
-            despawn_template,
-            list_templates,
-            list_spawned,
             emit_reward,
             record_feedback,
             compute_intrinsic,
             list_reward_sources,
+            # Templates
+            spawn_template,
+            despawn_template,
+            list_templates,
+            list_spawned,
+            # Skills
+            activate_skill,
+            deactivate_skill,
+            list_skills,
+            use_skill,
+            codify_skill,
+            search_skills,
+            recommend_skills,
         ]
 
     def _build_strands_agent(self) -> StrandsAgent:

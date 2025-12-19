@@ -535,6 +535,10 @@ class BodyDirectory:
             "unconscious",
             "unconscious/pipelines",
             "unconscious/streams",
+            "skills",
+            "skills/learned",
+            "skills/developing",
+            "skills/atrophied",
             "steps",
         ]:
             (self.root / subdir).mkdir(parents=True, exist_ok=True)
@@ -720,6 +724,33 @@ class BodyDirectory:
             fm = self._step_files.get("focus")
             if fm:
                 fm.model = value
+
+    # =========================================================================
+    # Skills (learned capabilities that are part of the body)
+    # =========================================================================
+
+    @property
+    def skills_dir(self) -> Path:
+        """Path to the skills directory."""
+        return self.root / "skills"
+
+    @property
+    def skills(self) -> "SkillManager":
+        """
+        Get the skill manager for this body.
+
+        Skills are learned capabilities stored in the body directory:
+        - skills/learned/     - Mastered skills (proficiency >= 80%)
+        - skills/developing/  - Skills being learned
+        - skills/atrophied/   - Unused skills (can be relearned)
+
+        Each skill is a directory with SKILL.md and optional scripts/.
+        """
+        from me.agent.skills import SkillManager
+        if not hasattr(self, '_skill_manager'):
+            self._skill_manager = SkillManager(self.skills_dir)
+            self._skill_manager.initialize()
+        return self._skill_manager
 
     # =========================================================================
     # Initialization
@@ -950,7 +981,8 @@ class BodyDirectory:
                 "significant": len(self.list_significant()),
                 "intentions": len(self.list_intentions()),
                 "theories": len(self.list_theories()),
-            }
+            },
+            "skills": self.skills.get_statistics(),
         }
 
     def to_prompt_section(self) -> str:
@@ -969,6 +1001,12 @@ class BodyDirectory:
 {f'- Parent: {i.parent_id}' if i.parent_id else '- Role: Root Agent'}
 - Generation: {i.generation}
 """
+
+        # Get skills summary
+        skill_stats = self.skills.get_statistics()
+        skills_summary = f"- Skills: {skill_stats['learned']} learned, {skill_stats['developing']} developing"
+        if skill_stats['active_now'] > 0:
+            skills_summary += f" ({skill_stats['active_now']} active)"
 
         return f"""### System
 - Host: {s.hostname}
@@ -990,4 +1028,5 @@ class BodyDirectory:
 - Path: {self.root}
 - Steps: {self.get_step_count()}
 - Memory: {len(self.list_episodes())} episodes, {len(self.list_procedures())} procedures
+{skills_summary}
 """

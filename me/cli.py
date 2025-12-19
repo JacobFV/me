@@ -642,6 +642,324 @@ def daemon_shutdown(agent: str | None):
     click.echo("Daemon system shutdown complete")
 
 
+# =============================================================================
+# Skills CLI
+# =============================================================================
+
+@main.group()
+def skills():
+    """Manage agent skills (learned capabilities)."""
+    pass
+
+
+@skills.command("list")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+@click.option("--state", "-s", type=click.Choice(["learned", "developing", "atrophied"]), help="Filter by state")
+def skills_list(agent: str | None, state: str | None):
+    """List agent skills."""
+    from me.agent.body import BodyDirectory
+    from me.agent.skills import SkillState
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found. Run 'me run <prompt>' first.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    filter_state = SkillState(state) if state else None
+    skill_list = manager.list_skills(filter_state)
+
+    if not skill_list:
+        click.echo("No skills acquired yet.")
+        click.echo("Use 'me skills create <name>' or the codify_skill tool to create skills.")
+        return
+
+    click.echo(f"\nSkills for agent {agent_id}:")
+    click.echo("-" * 50)
+
+    current_state = None
+    for skill in sorted(skill_list, key=lambda s: (s.state.value, -s.proficiency)):
+        if skill.state != current_state:
+            current_state = skill.state
+            state_color = {"learned": "green", "developing": "yellow", "atrophied": "red"}.get(current_state.value, "white")
+            click.echo(f"\n{click.style(current_state.value.upper(), fg=state_color)}:")
+
+        active_indicator = click.style(" (ACTIVE)", fg="cyan") if skill.is_active else ""
+        prof_bar = "█" * int(skill.proficiency * 10) + "░" * (10 - int(skill.proficiency * 10))
+        click.echo(f"  {skill.name}: [{prof_bar}] {skill.proficiency:.0%}{active_indicator}")
+        if skill.description:
+            click.echo(f"    {skill.description[:60]}")
+
+
+@skills.command("show")
+@click.argument("name")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+def skills_show(name: str, agent: str | None):
+    """Show skill details."""
+    from me.agent.body import BodyDirectory
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    skill = manager.get_skill(name)
+    if not skill:
+        click.echo(f"Skill not found: {name}")
+        return
+
+    meta = skill.metadata
+    click.echo(f"\n{'='*60}")
+    click.echo(f"Skill: {meta.name}")
+    click.echo(f"{'='*60}")
+    click.echo(f"Description: {meta.description}")
+    click.echo(f"Version: {meta.version}")
+    click.echo(f"State: {meta.state.value}")
+    click.echo(f"Proficiency: {meta.proficiency:.0%}")
+    click.echo(f"Uses: {meta.use_count} ({meta.success_count} successes, {meta.failure_count} failures)")
+    click.echo(f"Active: {meta.is_active}")
+    click.echo(f"Tags: {', '.join(meta.tags) if meta.tags else 'none'}")
+    click.echo(f"Domains: {', '.join(meta.domains) if meta.domains else 'none'}")
+    click.echo(f"Learned from: {meta.learned_from or 'unknown'}")
+    click.echo(f"Created: {meta.created_at.isoformat() if meta.created_at else 'unknown'}")
+    click.echo(f"Last used: {meta.last_used.isoformat() if meta.last_used else 'never'}")
+
+    if skill.scripts:
+        click.echo(f"\nScripts: {', '.join(skill.scripts)}")
+
+    if skill.steps:
+        click.echo(f"\nSteps:")
+        for i, step in enumerate(skill.steps, 1):
+            click.echo(f"  {i}. {step}")
+
+    if skill.metadata.daemons:
+        click.echo(f"\nDaemons:")
+        for d in skill.metadata.daemons:
+            click.echo(f"  - {d.get('name', 'unnamed')}: {d.get('trigger', 'on_change')}")
+
+    click.echo(f"\n--- Instructions ---")
+    click.echo(skill.instructions[:2000])
+    if len(skill.instructions) > 2000:
+        click.echo("... (truncated)")
+
+
+@skills.command("activate")
+@click.argument("name")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+def skills_activate(name: str, agent: str | None):
+    """Activate a skill."""
+    from me.agent.body import BodyDirectory
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    skill = manager.activate_skill(name)
+    if skill:
+        click.echo(f"Activated skill: {name}")
+        click.echo(f"Proficiency: {skill.metadata.proficiency:.0%}")
+    else:
+        click.echo(f"Skill not found: {name}")
+
+
+@skills.command("deactivate")
+@click.argument("name")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+def skills_deactivate(name: str, agent: str | None):
+    """Deactivate a skill."""
+    from me.agent.body import BodyDirectory
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    if manager.deactivate_skill(name):
+        click.echo(f"Deactivated skill: {name}")
+    else:
+        click.echo(f"Skill not found or not active: {name}")
+
+
+@skills.command("create")
+@click.argument("name")
+@click.option("--description", "-d", prompt="Description", help="Skill description")
+@click.option("--tags", "-t", default="", help="Comma-separated tags")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+def skills_create(name: str, description: str, tags: str, agent: str | None):
+    """Create a new skill interactively."""
+    from me.agent.body import BodyDirectory
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    click.echo("\nEnter skill instructions (markdown). End with Ctrl+D or empty line:")
+    lines = []
+    try:
+        while True:
+            line = input()
+            if not line and lines:
+                break
+            lines.append(line)
+    except EOFError:
+        pass
+
+    instructions = "\n".join(lines)
+    if not instructions.strip():
+        instructions = f"## {name}\n\nInstructions for {name} skill."
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+
+    skill = manager.codify_skill(
+        name=name,
+        description=description,
+        instructions=instructions,
+        tags=tag_list,
+    )
+
+    click.echo(f"\nCreated skill: {skill.metadata.name}")
+    click.echo(f"State: developing")
+    click.echo(f"Path: {manager.skills_dir / 'developing' / name}")
+
+
+@skills.command("delete")
+@click.argument("name")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+@click.confirmation_option(prompt="Are you sure you want to delete this skill?")
+def skills_delete(name: str, agent: str | None):
+    """Delete a skill."""
+    from me.agent.body import BodyDirectory
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    if manager.delete_skill(name):
+        click.echo(f"Deleted skill: {name}")
+    else:
+        click.echo(f"Skill not found: {name}")
+
+
+@skills.command("install")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option("--agent", "-a", default=None, help="Agent ID")
+def skills_install(path: Path, agent: str | None):
+    """Install a skill from an external directory."""
+    from me.agent.body import BodyDirectory
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    skill = manager.install_skill(path)
+    if skill:
+        click.echo(f"Installed skill: {skill.metadata.name}")
+        click.echo(f"State: developing")
+    else:
+        click.echo(f"Failed to install skill. Ensure {path}/SKILL.md exists.")
+
+
+@skills.command("install-templates")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+def skills_install_templates(agent: str | None):
+    """Install default skill templates."""
+    from me.agent.body import BodyDirectory
+    from me.agent.skill_templates import install_all_templates
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    installed = install_all_templates(manager)
+    if installed:
+        click.echo(f"Installed {len(installed)} skill templates:")
+        for name in installed:
+            click.echo(f"  - {name}")
+    else:
+        click.echo("No templates to install or all already installed.")
+
+
+@skills.command("stats")
+@click.option("--agent", "-a", default=None, help="Agent ID")
+def skills_stats(agent: str | None):
+    """Show skill statistics."""
+    from me.agent.body import BodyDirectory
+
+    base_dir = Path.home() / ".me"
+    agent_id = agent or _get_default_agent(base_dir)
+    if not agent_id:
+        click.echo("No agent found.")
+        return
+
+    body = BodyDirectory(base_dir, agent_id)
+    body.initialize()
+    manager = body.skills
+
+    stats = manager.get_statistics()
+    click.echo(f"\nSkill Statistics for {agent_id}:")
+    click.echo("-" * 40)
+    click.echo(f"Total skills: {stats['total_skills']}")
+    click.echo(f"  Learned: {stats['learned']}")
+    click.echo(f"  Developing: {stats['developing']}")
+    click.echo(f"  Atrophied: {stats['atrophied']}")
+    click.echo(f"Currently active: {stats['active_now']}")
+    click.echo(f"Total uses: {stats['total_uses']}")
+    click.echo(f"Average proficiency: {stats['avg_proficiency']:.0%}")
+
+    if stats['domains']:
+        click.echo(f"\nDomains: {', '.join(stats['domains'])}")
+
+    if stats['by_type']:
+        click.echo("\nBy type:")
+        for skill_type, count in stats['by_type'].items():
+            if count > 0:
+                click.echo(f"  {skill_type}: {count}")
+
+
 def _get_default_agent(base_dir: Path) -> str | None:
     """Get the most recently used agent ID."""
     agents_dir = base_dir / "agents"
