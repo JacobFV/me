@@ -62,7 +62,7 @@ from typing import Any
 
 import psutil
 from pydantic import BaseModel, Field
-from filepydantic import FileDirectory, FileModel
+from me.vendor.filepydantic import FileDirectory, FileModel
 
 
 # =============================================================================
