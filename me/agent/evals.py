@@ -316,7 +316,7 @@ class EvalValidators:
     """Validation functions for evaluation tasks."""
 
     @staticmethod
-    def validate_fizzbuzz(output: str) -> tuple[float, str]:
+    def validate_fizzbuzz(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate FizzBuzz implementation."""
         # Check for key outputs
         checks = [
@@ -330,7 +330,7 @@ class EvalValidators:
         return passed / len(checks), notes
 
     @staticmethod
-    def validate_json_parser(output: str) -> tuple[float, str]:
+    def validate_json_parser(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate JSON parser implementation."""
         # Check for key components
         checks = [
@@ -343,7 +343,7 @@ class EvalValidators:
         return passed / len(checks), f"Passed {passed}/{len(checks)} checks"
 
     @staticmethod
-    def validate_scheduler(output: str) -> tuple[float, str]:
+    def validate_scheduler(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate task scheduler implementation."""
         checks = [
             ("priority" in output.lower(), "Has priority handling"),
@@ -355,12 +355,13 @@ class EvalValidators:
         return passed / len(checks), f"Passed {passed}/{len(checks)} checks"
 
     @staticmethod
-    def validate_bug_detection(output: str, expected: dict) -> tuple[float, str]:
+    def validate_bug_detection(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate bug detection results."""
+        input_data = input_data or {}
         bugs_found = 0
-        total_bugs = len(expected.get("code_samples", []))
+        total_bugs = len(input_data.get("code_samples", []))
 
-        for sample in expected.get("code_samples", []):
+        for sample in input_data.get("code_samples", []):
             for bug in sample.get("bugs", []):
                 if bug.lower() in output.lower():
                     bugs_found += 1
@@ -369,7 +370,7 @@ class EvalValidators:
         return bugs_found / max(1, total_bugs), f"Found {bugs_found}/{total_bugs} bugs"
 
     @staticmethod
-    def validate_minimal_solution(output: str) -> tuple[float, str]:
+    def validate_minimal_solution(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate solution minimality."""
         # Count lines and characters
         lines = len([l for l in output.split("\n") if l.strip()])
@@ -384,19 +385,21 @@ class EvalValidators:
         return score, f"{lines} lines, {chars} chars"
 
     @staticmethod
-    def validate_procedure_recall(output: str, expected: dict) -> tuple[float, str]:
+    def validate_procedure_recall(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate procedure recall accuracy."""
-        procedure = expected.get("procedure", "")
+        input_data = input_data or {}
+        procedure = input_data.get("procedure", "")
         steps = ["test", "build", "push", "k8s"]
 
         found = sum(1 for step in steps if step.lower() in output.lower())
         return found / len(steps), f"Recalled {found}/{len(steps)} steps"
 
     @staticmethod
-    def validate_calibration(output: str, expected: dict) -> tuple[float, str]:
+    def validate_calibration(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate confidence calibration."""
+        input_data = input_data or {}
         # This is a simplified check - real calibration needs many samples
-        questions = expected.get("questions", [])
+        questions = input_data.get("questions", [])
         correct = 0
 
         for q in questions:
@@ -410,7 +413,7 @@ class EvalValidators:
         return correct / max(1, len(questions)), f"{correct}/{len(questions)} correct"
 
     @staticmethod
-    def validate_robustness(output: str, expected: dict) -> tuple[float, str]:
+    def validate_robustness(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate robustness to malformed input."""
         # Check that agent didn't crash or produce garbage
         checks = [
@@ -422,9 +425,10 @@ class EvalValidators:
         return passed / len(checks), f"Passed {passed}/{len(checks)} robustness checks"
 
     @staticmethod
-    def validate_learning(output: str, expected: dict) -> tuple[float, str]:
+    def validate_learning(output: str, input_data: dict | None = None) -> tuple[float, str]:
         """Validate learning from feedback."""
-        feedback = expected.get("feedback", "")
+        input_data = input_data or {}
+        feedback = input_data.get("feedback", "")
 
         # Check if feedback was incorporated
         if "f-string" in feedback.lower() or "f'" in feedback:
