@@ -281,6 +281,23 @@ from me.agent.self_model import (
     SelfModelSystem,
 )
 
+# Evaluation framework
+from me.agent.evals import (
+    MetricCategory,
+    EvalDifficulty,
+    MetricValue,
+    EvalTask,
+    EvalResult,
+    EvalReport,
+    BaselineMetrics,
+    MetricsHistory,
+    EvalValidators,
+    TaskRunner,
+    AgentEvaluator,
+    EVAL_TASKS,
+    print_report,
+)
+
 __all__ = [
     # Core
     "Agent",
@@ -534,4 +551,18 @@ __all__ = [
     "LimitationRegistry",
     "FeasibilityAssessor",
     "SelfModelSystem",
+    # Evaluation Framework
+    "MetricCategory",
+    "EvalDifficulty",
+    "MetricValue",
+    "EvalTask",
+    "EvalResult",
+    "EvalReport",
+    "BaselineMetrics",
+    "MetricsHistory",
+    "EvalValidators",
+    "TaskRunner",
+    "AgentEvaluator",
+    "EVAL_TASKS",
+    "print_report",
 ]
